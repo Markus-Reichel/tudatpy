@@ -52,6 +52,7 @@ ComaModel::ComaModel( const simulation_setup::ComaPolyDataset& polyDataset,
     cachedLatitude_( 0.0 ),
     cachedLongitude_( 0.0 ),
     cachedFinalDensity_( 0.0 ),
+    cachedDensityCorrectionMultipliers_( Eigen::VectorXd::Ones( 1 ) ),
     cachedFinalTemperature_( 0.0 ),
     interpolationPoint2D_( 2 ),
     interpolationPoint1D_( 1 ),
@@ -61,6 +62,8 @@ ComaModel::ComaModel( const simulation_setup::ComaPolyDataset& polyDataset,
     maximumOrder_( maximumOrder ),
     heatCapacityRatio_( heatCapacityRatio ),
     specificGasConstant_( physical_constants::MOLAR_GAS_CONSTANT / molecularWeight ),
+    densityCorrectionHarmonicDegree_( 0 ),
+    densityCorrectionParameters_( Eigen::VectorXd::Zero( 1 ) ),
     hasTemperatureDataset_( temperaturePolyDataset != nullptr ),
     isLog2Data_( isLog2Data ),
     polyDataset_( std::make_shared<simulation_setup::ComaPolyDataset>( polyDataset ) ),
@@ -138,6 +141,7 @@ ComaModel::ComaModel( const simulation_setup::ComaStokesDataset& stokesDataset,
     cachedLatitude_( 0.0 ),
     cachedLongitude_( 0.0 ),
     cachedFinalDensity_( 0.0 ),
+    cachedDensityCorrectionMultipliers_( Eigen::VectorXd::Ones( 1 ) ),
     cachedFinalTemperature_( 0.0 ),
     interpolationPoint2D_( 2 ),
     interpolationPoint1D_( 1 ),
@@ -147,6 +151,8 @@ ComaModel::ComaModel( const simulation_setup::ComaStokesDataset& stokesDataset,
     maximumOrder_( maximumOrder ),
     heatCapacityRatio_( heatCapacityRatio ),
     specificGasConstant_( physical_constants::MOLAR_GAS_CONSTANT / molecularWeight ),
+    densityCorrectionHarmonicDegree_( 0 ),
+    densityCorrectionParameters_( Eigen::VectorXd::Zero( 1 ) ),
     hasTemperatureDataset_( temperatureStokesDataset != nullptr ),
     isLog2Data_( isLog2Data ),
     polyDataset_( nullptr ),
@@ -281,11 +287,68 @@ double ComaModel::getNumberDensity( const double radius,
             throw std::runtime_error( "ComaModel: Unknown data type" );
     }
 
-    // Convert back to number density: apply exp2 only if coefficients are log2-transformed
-    cachedFinalDensity_ = isLog2Data_ ? std::exp2( numberDensityRaw ) : numberDensityRaw;
+    // Convert back to number density and apply optional log-density correction.
+    cachedDensityCorrectionMultipliers_ = getDensityCorrectionMultipliers( longitude, time );
+    const double densityCorrection = std::exp( densityCorrectionParameters_.dot( cachedDensityCorrectionMultipliers_ ) );
+    cachedFinalDensity_ = ( isLog2Data_ ? std::exp2( numberDensityRaw ) : numberDensityRaw ) * densityCorrection;
     cacheFlags_.densityValid = true;
 
     return cachedFinalDensity_;
+}
+
+Eigen::VectorXd ComaModel::getDensityCorrectionParameterVector( ) const
+{
+    return densityCorrectionParameters_;
+}
+
+void ComaModel::setDensityCorrectionHarmonicDegree( const int harmonicDegree )
+{
+    if ( harmonicDegree < 0 )
+    {
+        throw std::runtime_error( "ComaModel: density correction harmonic degree must be non-negative" );
+    }
+
+    densityCorrectionHarmonicDegree_ = harmonicDegree;
+    densityCorrectionParameters_ = Eigen::VectorXd::Zero( getDensityCorrectionParameterSize( ) );
+    cachedDensityCorrectionMultipliers_ = Eigen::VectorXd::Zero( getDensityCorrectionParameterSize( ) );
+    cachedDensityCorrectionMultipliers_( 0 ) = 1.0;
+    cacheFlags_.densityValid = false;
+}
+
+int ComaModel::getDensityCorrectionHarmonicDegree( ) const
+{
+    return densityCorrectionHarmonicDegree_;
+}
+
+int ComaModel::getDensityCorrectionParameterSize( ) const
+{
+    return 1 + 2 * densityCorrectionHarmonicDegree_;
+}
+
+void ComaModel::setDensityCorrectionParameterVector( const Eigen::VectorXd& densityCorrectionParameters )
+{
+    if ( densityCorrectionParameters.rows() != getDensityCorrectionParameterSize( ) )
+    {
+        throw std::runtime_error( "ComaModel: density correction parameter vector must have size " +
+                                  std::to_string( getDensityCorrectionParameterSize( ) ) );
+    }
+
+    densityCorrectionParameters_ = densityCorrectionParameters;
+    cacheFlags_.densityValid = false;
+}
+
+Eigen::MatrixXd ComaModel::getDensityCorrectionAccelerationPartial( const double currentTime,
+                                                                    const Eigen::Vector3d& currentAcceleration ) const
+{
+    TUDAT_UNUSED_PARAMETER( currentTime );
+
+    Eigen::MatrixXd accelerationPartial( 3, getDensityCorrectionParameterSize( ) );
+    for ( int parameterIndex = 0; parameterIndex < getDensityCorrectionParameterSize( ); ++parameterIndex )
+    {
+        accelerationPartial.col( parameterIndex ) =
+                currentAcceleration * cachedDensityCorrectionMultipliers_( parameterIndex );
+    }
+    return accelerationPartial;
 }
 
 /*!
@@ -547,6 +610,20 @@ double ComaModel::calculateSolarLongitude( const double time ) const
     cacheFlags_.stateValid = true;
 
     return cachedSolarLongitude_;
+}
+
+Eigen::VectorXd ComaModel::getDensityCorrectionMultipliers( const double longitude, const double time ) const
+{
+    const double localSolarAngle = longitude - calculateSolarLongitude( time );
+    Eigen::VectorXd densityCorrectionMultipliers = Eigen::VectorXd::Zero( getDensityCorrectionParameterSize( ) );
+    densityCorrectionMultipliers( 0 ) = 1.0;
+    for ( int degree = 1; degree <= densityCorrectionHarmonicDegree_; ++degree )
+    {
+        const double degreeLocalSolarAngle = static_cast< double >( degree ) * localSolarAngle;
+        densityCorrectionMultipliers( 2 * degree - 1 ) = std::cos( degreeLocalSolarAngle );
+        densityCorrectionMultipliers( 2 * degree ) = std::sin( degreeLocalSolarAngle );
+    }
+    return densityCorrectionMultipliers;
 }
 
 //-----------------------------------------------------------------------------

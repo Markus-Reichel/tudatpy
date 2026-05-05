@@ -50,10 +50,18 @@ public:
                                     const std::function< Eigen::Vector6d( ) > vehicleStateGetFunction,
                                     const std::function< void( const Eigen::Vector6d& ) > vehicleStateSetFunction,
                                     const std::string acceleratedBody,
-                                    const std::string acceleratingBody ):
+                                    const std::string acceleratingBody,
+                                    const std::shared_ptr< estimatable_parameters::CustomSingleAccelerationPartialCalculatorSet >
+                                            customAccelerationPartialSet =
+                                                    std::make_shared<
+                                                            estimatable_parameters::CustomSingleAccelerationPartialCalculatorSet >( ) ):
         AccelerationPartial( acceleratedBody, acceleratingBody, aerodynamicAcceleration, basic_astrodynamics::aerodynamic ),
         aerodynamicAcceleration_( aerodynamicAcceleration ), flightConditions_( flightConditions ),
-        vehicleStateGetFunction_( vehicleStateGetFunction ), vehicleStateSetFunction_( vehicleStateSetFunction )
+        vehicleStateGetFunction_( vehicleStateGetFunction ), vehicleStateSetFunction_( vehicleStateSetFunction ),
+        customAccelerationPartialSet_( customAccelerationPartialSet != nullptr
+                                               ? customAccelerationPartialSet
+                                               : std::make_shared<
+                                                         estimatable_parameters::CustomSingleAccelerationPartialCalculatorSet >( ) )
     {
         bodyStatePerturbations_ << 10.0, 10.0, 10.0, 1.0E-2, 1.0E-2, 1.0E-2;
     }
@@ -285,6 +293,11 @@ protected:
      */
     void computeAccelerationPartialWrtCurrentDensity( Eigen::MatrixXd& accelerationPartial );
 
+    //! Function to compute custom partials of the acceleration w.r.t. a parameter.
+    void createCustomParameterPartialFunction(
+            Eigen::MatrixXd& partialBlock,
+            const std::shared_ptr< estimatable_parameters::CustomAccelerationPartialCalculator > customPartialCalculator );
+
     //! Function to compute the partial derivative of the acceleration w.r.t. the base density of the exponential atmosphere model
     /*!
      * Function to compute the partial derivative of the acceleration w.r.t. the base density of the exponential atmosphere model
@@ -334,6 +347,9 @@ protected:
 
     //! Function to set the state of the body undergoing the acceleration
     std::function< void( const Eigen::Vector6d& ) > vehicleStateSetFunction_;
+
+    //! Optional custom acceleration partial calculators.
+    std::shared_ptr< estimatable_parameters::CustomSingleAccelerationPartialCalculatorSet > customAccelerationPartialSet_;
 };
 
 }  // namespace acceleration_partials

@@ -22,6 +22,7 @@
 #include <tudat/astro/aerodynamics/aerodynamicCoefficientGenerator.h>
 #include <tudat/astro/aerodynamics/aerodynamicCoefficientInterface.h>
 #include <tudat/astro/aerodynamics/atmosphereModel.h>
+#include <tudat/astro/aerodynamics/comaModel.h>
 #include <tudat/astro/aerodynamics/controlSurfaceAerodynamicCoefficientInterface.h>
 #include <tudat/astro/aerodynamics/flightConditions.h>
 #include <tudat/astro/aerodynamics/hypersonicLocalInclinationAnalysis.h>
@@ -908,6 +909,66 @@ bool
 
 
      )doc" );
+
+    py::class_< ta::ComaModel, std::shared_ptr< ta::ComaModel >, ta::AtmosphereModel >(
+            m,
+            "ComaModel",
+            R"doc(Comet coma atmosphere model.)doc" )
+            .def( "get_number_density",
+                  py::overload_cast< double, double, double, double >( &ta::ComaModel::getNumberDensity ),
+                  py::arg( "radius" ),
+                  py::arg( "longitude" ),
+                  py::arg( "latitude" ),
+                  py::arg( "time" ),
+                  R"doc(
+
+Get local coma number density at radius, longitude, latitude, and time.
+
+)doc" )
+            .def_property( "density_correction_parameters",
+                           &ta::ComaModel::getDensityCorrectionParameterVector,
+                           &ta::ComaModel::setDensityCorrectionParameterVector,
+                           R"doc(
+
+Log-density correction parameters ``[c0, a1, b1, ..., aN, bN]``.
+
+The applied density multiplier is
+``exp(c0 + sum_k(a_k*cos(k*(longitude - solar_longitude)) + b_k*sin(k*(longitude - solar_longitude))))``.
+
+)doc" )
+            .def( "set_density_correction_harmonic_degree",
+                  &ta::ComaModel::setDensityCorrectionHarmonicDegree,
+                  py::arg( "degree" ),
+                  R"doc(
+
+Set the maximum harmonic degree of the log-density correction.
+
+The correction parameter vector is resized to ``1 + 2 * degree`` and reset to zero.
+
+)doc" )
+            .def( "get_density_correction_harmonic_degree",
+                  &ta::ComaModel::getDensityCorrectionHarmonicDegree,
+                  R"doc(Return the maximum harmonic degree of the log-density correction.)doc" )
+            .def( "get_density_correction_parameter_size",
+                  &ta::ComaModel::getDensityCorrectionParameterSize,
+                  R"doc(Return the correction parameter vector size ``1 + 2 * degree``.)doc" )
+            .def( "get_density_correction_parameters",
+                  &ta::ComaModel::getDensityCorrectionParameterVector,
+                  R"doc(Return the log-density correction parameters ``[c0, a1, b1, ..., aN, bN]``.)doc" )
+            .def( "set_density_correction_parameters",
+                  &ta::ComaModel::setDensityCorrectionParameterVector,
+                  py::arg( "parameters" ),
+                  R"doc(Set the log-density correction parameters ``[c0, a1, b1, ..., aN, bN]``.)doc" )
+            .def( "get_density_correction_acceleration_partial",
+                  &ta::ComaModel::getDensityCorrectionAccelerationPartial,
+                  py::arg( "time" ),
+                  py::arg( "current_acceleration" ),
+                  R"doc(
+
+Return the analytical aerodynamic acceleration partial with respect to the log-density
+correction parameters. The matrix has shape ``3 x (1 + 2 * degree)``.
+
+)doc" );
 
     py::class_< ta::AerodynamicCoefficientInterface, std::shared_ptr< ta::AerodynamicCoefficientInterface > >(
             m,

@@ -307,10 +307,11 @@ std::shared_ptr< acceleration_partials::AccelerationPartial > createAnalyticalAc
                 createCustomAccelerationPartial( parametersToEstimate, accelerationModel, acceleratedBody, acceleratingBody, bodies );
 
         if( ( customPartialCalculator->getNumberOfCustomPartials( ) > 0 ) && ( accelerationType != custom_acceleration ) &&
-            ( accelerationType != radiation_pressure ) )
+            ( accelerationType != radiation_pressure ) && ( accelerationType != aerodynamic ) )
         {
             throw std::runtime_error(
-                    "Error, custom acceleration partials only supported for custom and radiation pressure acceleration (at present)" );
+                    "Error, custom acceleration partials only supported for custom, radiation pressure, and aerodynamic accelerations "
+                    "(at present)" );
         }
     }
     switch( accelerationType )
@@ -731,7 +732,8 @@ std::shared_ptr< acceleration_partials::AccelerationPartial > createAnalyticalAc
                             std::bind( &Body::getState, acceleratedBody.second ),
                             std::bind( &Body::setState, acceleratedBody.second, std::placeholders::_1 ),
                             acceleratedBody.first,
-                            acceleratingBody.first );
+                            acceleratingBody.first,
+                            customPartialCalculator );
                 }
             }
             break;

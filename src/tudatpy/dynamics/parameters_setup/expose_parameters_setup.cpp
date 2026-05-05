@@ -169,7 +169,18 @@ The identifier is represented by a tuple of the form ``(parameter_type, (body_na
 
 :type: tuple[ :class:`~tudatpy.dynamics.parameters_setup.EstimatableParameterTypes`, tuple[str, str] ]
                             
-                            )doc" );
+                            )doc" )
+            .def( "add_custom_partial_settings",
+                  []( tep::EstimatableParameterSettings& parameterSettings,
+                      const std::shared_ptr< tep::CustomAccelerationPartialSettings > customPartialSettings ) {
+                      parameterSettings.customPartialSettings_.push_back( customPartialSettings );
+                  },
+                  py::arg( "custom_partial_settings" ),
+                  R"doc(
+
+Add custom acceleration partial settings to this estimatable parameter.
+
+)doc" );
 
     // # EstimatableParameterSettings --> EstimatableParameterSet #
     m.def( "create_parameter_set",
@@ -2102,7 +2113,23 @@ Returns
     // CUSTOM AND ANALYTICAL ACCELERATION PARTIALS
 
     py::class_< tep::CustomAccelerationPartialSettings, std::shared_ptr< tep::CustomAccelerationPartialSettings > >(
-            m, "CustomAccelerationPartialSettings", R"doc(No documentation found.)doc" );
+            m,
+            "CustomAccelerationPartialSettings",
+            R"doc(Settings for a user-provided acceleration partial associated with an estimatable parameter.)doc" );
+
+    py::class_< tep::AnalyticalAccelerationPartialSettings,
+                std::shared_ptr< tep::AnalyticalAccelerationPartialSettings >,
+                tep::CustomAccelerationPartialSettings >(
+            m,
+            "AnalyticalAccelerationPartialSettings",
+            R"doc(Settings for an analytical user-provided acceleration partial.)doc" );
+
+    py::class_< tep::NumericalAccelerationPartialSettings,
+                std::shared_ptr< tep::NumericalAccelerationPartialSettings >,
+                tep::CustomAccelerationPartialSettings >(
+            m,
+            "NumericalAccelerationPartialSettings",
+            R"doc(Settings for a numerical user-provided acceleration partial.)doc" );
 
     m.def( "custom_analytical_partial",
            &tep::analyticalAccelerationPartialSettings,
@@ -2112,6 +2139,21 @@ Returns
            py::arg( "acceleration_type" ),
            R"doc(No documentation found.)doc" );
 
+    m.def( "analytical_acceleration_partial",
+           &tep::analyticalAccelerationPartialSettings,
+           py::arg( "analytical_partial_function" ),
+           py::arg( "body_undergoing_acceleration" ),
+           py::arg( "body_exerting_acceleration" ),
+           py::arg( "acceleration_type" ),
+           R"doc(
+
+Create settings for an analytical acceleration partial with respect to an estimatable parameter.
+
+The callable must have signature ``f(time, current_acceleration)`` and return a 3 x N matrix, where N is
+the size of the parameter to which these settings are attached.
+
+)doc" );
+
     m.def( "custom_numerical_partial",
            &tep::numericalAccelerationPartialSettings,
            py::arg( "parameter_perturbation" ),
@@ -2120,6 +2162,19 @@ Returns
            py::arg( "acceleration_type" ),
            py::arg( "environment_updates" ) = std::map< tp::EnvironmentModelsToUpdate, std::vector< std::string > >( ),
            R"doc(No documentation found.)doc" );
+
+    m.def( "numerical_acceleration_partial",
+           &tep::numericalAccelerationPartialSettings,
+           py::arg( "parameter_perturbation" ),
+           py::arg( "body_undergoing_acceleration" ),
+           py::arg( "body_exerting_acceleration" ),
+           py::arg( "acceleration_type" ),
+           py::arg( "environment_updates" ) = std::map< tp::EnvironmentModelsToUpdate, std::vector< std::string > >( ),
+           R"doc(
+
+Create settings for a numerical state-perturbation acceleration partial with respect to an estimatable parameter.
+
+)doc" );
 }
 
 }  // namespace parameters_setup

@@ -3,6 +3,7 @@
 
 
 #include <memory>
+#include <Eigen/Core>
 
 
 #include "tudat/astro/aerodynamics/atmosphereModel.h"
@@ -174,6 +175,44 @@ public:
      */
     inline double getSolarLongitude() const { return cachedSolarLongitude_; }
 
+    /*!
+     * \brief Set the harmonic degree used by the log-density correction.
+     * \param harmonicDegree Maximum harmonic degree. Degree 0 estimates only the constant offset.
+     */
+    void setDensityCorrectionHarmonicDegree( int harmonicDegree );
+
+    /*!
+     * \brief Return the harmonic degree used by the log-density correction.
+     * \return Maximum harmonic degree.
+     */
+    int getDensityCorrectionHarmonicDegree( ) const;
+
+    /*!
+     * \brief Return the number of log-density correction parameters for the selected harmonic degree.
+     * \return Parameter vector size, equal to 1 + 2 * degree.
+     */
+    int getDensityCorrectionParameterSize( ) const;
+
+    /*!
+     * \brief Return log-density correction parameters [c0, a1, b1, ..., aN, bN].
+     */
+    Eigen::VectorXd getDensityCorrectionParameterVector() const;
+
+    /*!
+     * \brief Set log-density correction parameters [c0, a1, b1, ..., aN, bN].
+     * \param densityCorrectionParameters Correction parameter vector with size 1 + 2 * degree.
+     */
+    void setDensityCorrectionParameterVector( const Eigen::VectorXd& densityCorrectionParameters );
+
+    /*!
+     * \brief Return analytical acceleration partials w.r.t. the density correction parameters.
+     * \param currentTime Current time [s].
+     * \param currentAcceleration Current aerodynamic acceleration [m/s^2].
+     * \return Matrix with columns currentAcceleration multiplied by each harmonic basis function.
+     */
+    Eigen::MatrixXd getDensityCorrectionAccelerationPartial( double currentTime,
+                                                             const Eigen::Vector3d& currentAcceleration ) const;
+
     //! Delete copy constructor and copy assignment operator (class contains unique_ptr members)
     ComaModel(const ComaModel&) = delete;
     ComaModel& operator=(const ComaModel&) = delete;
@@ -207,6 +246,9 @@ private:
 
     //! Cached final density result to avoid repeated exp2 calls
     mutable double cachedFinalDensity_;
+
+    //! Cached correction basis [1, cos(local solar angle), sin(local solar angle), ...]
+    mutable Eigen::VectorXd cachedDensityCorrectionMultipliers_;
 
     //! Cached final temperature result to avoid repeated calculations
     mutable double cachedFinalTemperature_;
@@ -258,6 +300,12 @@ private:
 
     //! Specific gas constant R_specific = R_universal / molecular_weight [J/(kg·K)]
     double specificGasConstant_;
+
+    //! Maximum harmonic degree used by the log-density correction.
+    int densityCorrectionHarmonicDegree_;
+
+    //! Log-density correction parameters [c0, a1, b1, ..., aN, bN]
+    Eigen::VectorXd densityCorrectionParameters_;
 
     //! Flag indicating whether temperature dataset was provided
     bool hasTemperatureDataset_;
@@ -391,6 +439,14 @@ private:
      * @return Solar longitude [rad]
      */
     double calculateSolarLongitude( double time ) const;
+
+    /*!
+     * @brief Compute density correction basis [1, cos(local solar angle), sin(local solar angle), ...].
+     * @param longitude Body-fixed longitude [rad]
+     * @param time Time at which to compute solar longitude [s]
+     * @return Correction multipliers for the selected harmonic degree.
+     */
+    Eigen::VectorXd getDensityCorrectionMultipliers( double longitude, double time ) const;
 
     /*!
      * @brief Initialize interpolators for Stokes coefficients (called only for STOKES_COEFFICIENTS data type)

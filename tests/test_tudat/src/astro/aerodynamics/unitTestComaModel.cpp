@@ -1543,6 +1543,100 @@ BOOST_FIXTURE_TEST_CASE(test_coma_model_density_validation_from_python, TestData
     BOOST_CHECK_EQUAL(failCount, 0);
 }
 
+BOOST_FIXTURE_TEST_CASE(test_coma_model_density_correction_parameters, TestDataPaths)
+{
+    const std::vector<std::string> files = {testFile.string()};
+    const ComaModelFileProcessor processor(files);
+
+    const int maxDegree = 10;
+    const int maxOrder = 10;
+    const double molecularWeight = 0.018;
+    const std::vector<double> radii_m = {4000.0, 10000.0};
+    const std::vector<double> lons_deg = {0.0, 90.0, 180.0, 270.0, 360.0};
+    const ComaStokesDataset stokesDataset = processor.createSHDataset(radii_m, lons_deg, maxDegree, maxOrder);
+
+    auto sunStateFunction = []() -> Eigen::Vector6d {
+        Eigen::Vector6d state = Eigen::Vector6d::Zero();
+        state.segment(0, 3) = Eigen::Vector3d(1.0e11, 0.0, 0.0);
+        return state;
+    };
+    auto cometStateFunction = []() -> Eigen::Vector6d {
+        return Eigen::Vector6d::Zero();
+    };
+    auto cometRotationFunction = []() -> Eigen::Matrix3d {
+        return Eigen::Matrix3d::Identity();
+    };
+
+    ComaModel comaModel(
+        stokesDataset,
+        molecularWeight,
+        sunStateFunction,
+        cometStateFunction,
+        cometRotationFunction,
+        maxDegree,
+        maxOrder
+    );
+
+    const double time = 0.5 * (stokesDataset.files().at(0).start_epoch + stokesDataset.files().at(0).end_epoch);
+    const double radius = 5000.0;
+    const double longitude = 0.25;
+    const double latitude = 0.1;
+
+    BOOST_CHECK_EQUAL(comaModel.getDensityCorrectionHarmonicDegree(), 0);
+    BOOST_CHECK_EQUAL(comaModel.getDensityCorrectionParameterSize(), 1);
+    BOOST_CHECK_THROW(comaModel.setDensityCorrectionHarmonicDegree(-1), std::runtime_error);
+
+    const double nominalDensity = comaModel.getDensity(radius, longitude, latitude, time);
+
+    Eigen::VectorXd halfScaleCorrection(1);
+    halfScaleCorrection << std::log(0.5);
+    comaModel.setDensityCorrectionParameterVector(halfScaleCorrection);
+    BOOST_CHECK_CLOSE(comaModel.getDensity(radius, longitude, latitude, time), 0.5 * nominalDensity, 1.0e-10);
+
+    const Eigen::Vector3d currentAcceleration(1.0, -2.0, 0.5);
+    Eigen::MatrixXd accelerationPartial =
+        comaModel.getDensityCorrectionAccelerationPartial(time, currentAcceleration);
+    BOOST_CHECK_EQUAL(accelerationPartial.rows(), 3);
+    BOOST_CHECK_EQUAL(accelerationPartial.cols(), 1);
+    BOOST_CHECK_SMALL((accelerationPartial.col(0) - currentAcceleration).norm(), 1.0e-15);
+
+    comaModel.setDensityCorrectionHarmonicDegree(3);
+    BOOST_CHECK_EQUAL(comaModel.getDensityCorrectionHarmonicDegree(), 3);
+    BOOST_CHECK_EQUAL(comaModel.getDensityCorrectionParameterSize(), 7);
+    BOOST_CHECK_EQUAL(comaModel.getDensityCorrectionParameterVector().rows(), 7);
+    BOOST_CHECK_SMALL(comaModel.getDensityCorrectionParameterVector().norm(), 1.0e-15);
+
+    Eigen::VectorXd wrongSizeCorrection(3);
+    wrongSizeCorrection << 0.0, 0.2, -0.1;
+    BOOST_CHECK_THROW(comaModel.setDensityCorrectionParameterVector(wrongSizeCorrection), std::runtime_error);
+
+    Eigen::VectorXd correctionParameters(7);
+    correctionParameters << 0.05, 0.2, -0.1, 0.03, 0.04, -0.02, 0.01;
+    comaModel.setDensityCorrectionParameterVector(correctionParameters);
+
+    Eigen::VectorXd expectedMultipliers(7);
+    expectedMultipliers(0) = 1.0;
+    for (int degree = 1; degree <= 3; ++degree)
+    {
+        expectedMultipliers(2 * degree - 1) = std::cos(static_cast<double>(degree) * longitude);
+        expectedMultipliers(2 * degree) = std::sin(static_cast<double>(degree) * longitude);
+    }
+
+    const double expectedCorrection = std::exp(correctionParameters.dot(expectedMultipliers));
+    BOOST_CHECK_CLOSE(comaModel.getDensity(radius, longitude, latitude, time), expectedCorrection * nominalDensity, 1.0e-10);
+
+    accelerationPartial =
+        comaModel.getDensityCorrectionAccelerationPartial(time, currentAcceleration);
+    BOOST_CHECK_EQUAL(accelerationPartial.rows(), 3);
+    BOOST_CHECK_EQUAL(accelerationPartial.cols(), 7);
+    for (int parameterIndex = 0; parameterIndex < expectedMultipliers.rows(); ++parameterIndex)
+    {
+        BOOST_CHECK_SMALL(
+            (accelerationPartial.col(parameterIndex) - currentAcceleration * expectedMultipliers(parameterIndex)).norm(),
+            1.0e-15);
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 // ==================== High-Level Interface Tests ====================

@@ -182,6 +182,14 @@ void AerodynamicAccelerationPartial::computeAccelerationPartialWrtCurrentDensity
     }
 }
 
+void AerodynamicAccelerationPartial::createCustomParameterPartialFunction(
+        Eigen::MatrixXd& partialBlock,
+        const std::shared_ptr< estimatable_parameters::CustomAccelerationPartialCalculator > customPartialCalculator )
+{
+    partialBlock = customPartialCalculator->computePartial(
+            currentTime_, aerodynamicAcceleration_->getAcceleration( ), aerodynamicAcceleration_ );
+}
+
 //! Function to compute the partial derivative of the acceleration w.r.t. base density
 /*!
  * Function to compute the partial derivative of the acceleration w.r.t. base density
@@ -334,7 +342,16 @@ std::pair< std::function< void( Eigen::MatrixXd& ) >, int > AerodynamicAccelerat
 {
     std::function< void( Eigen::MatrixXd& ) > partialFunction;
     int numberOfColumns = 0;
-    if( parameter->getParameterName( ).second.first == acceleratedBody_ )
+    if( customAccelerationPartialSet_->customDoubleParameterPartials_.count( parameter->getParameterName( ) ) != 0 )
+    {
+        partialFunction = std::bind(
+                &AerodynamicAccelerationPartial::createCustomParameterPartialFunction,
+                this,
+                std::placeholders::_1,
+                customAccelerationPartialSet_->customDoubleParameterPartials_.at( parameter->getParameterName( ) ) );
+        numberOfColumns = 1;
+    }
+    else if( parameter->getParameterName( ).second.first == acceleratedBody_ )
     {
         switch( parameter->getParameterName( ).first )
         {
@@ -457,7 +474,16 @@ std::pair< std::function< void( Eigen::MatrixXd& ) >, int > AerodynamicAccelerat
 {
     std::function< void( Eigen::MatrixXd& ) > partialFunction;
     int numberOfColumns = 0;
-    if( parameter->getParameterName( ).second.first == acceleratedBody_ )
+    if( customAccelerationPartialSet_->customVectorParameterPartials_.count( parameter->getParameterName( ) ) != 0 )
+    {
+        partialFunction = std::bind(
+                &AerodynamicAccelerationPartial::createCustomParameterPartialFunction,
+                this,
+                std::placeholders::_1,
+                customAccelerationPartialSet_->customVectorParameterPartials_.at( parameter->getParameterName( ) ) );
+        numberOfColumns = parameter->getParameterSize( );
+    }
+    else if( parameter->getParameterName( ).second.first == acceleratedBody_ )
     {
         switch( parameter->getParameterName( ).first )
         {
