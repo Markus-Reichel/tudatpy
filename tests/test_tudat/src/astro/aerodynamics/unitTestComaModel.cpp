@@ -1635,6 +1635,68 @@ BOOST_FIXTURE_TEST_CASE(test_coma_model_density_correction_parameters, TestDataP
             (accelerationPartial.col(parameterIndex) - currentAcceleration * expectedMultipliers(parameterIndex)).norm(),
             1.0e-15);
     }
+
+    comaModel.setDensityCorrectionParameterVector(Eigen::VectorXd::Zero(7));
+    const double startTime = stokesDataset.files().at(0).start_epoch;
+    const double endTime = stokesDataset.files().at(0).end_epoch;
+    const double firstArcTime = startTime + 0.25 * (endTime - startTime);
+    const double secondArcTime = startTime + 0.75 * (endTime - startTime);
+    const double secondArcStartTime = startTime + 0.5 * (endTime - startTime);
+    const std::vector<double> arcStartTimes = {startTime, secondArcStartTime};
+
+    const double firstArcNominalDensity = comaModel.getDensity(radius, longitude, latitude, firstArcTime);
+    const double secondArcNominalDensity = comaModel.getDensity(radius, longitude, latitude, secondArcTime);
+
+    BOOST_CHECK_THROW(
+        comaModel.setArcWiseDensityCorrectionArcStartTimes(std::vector<double>({secondArcStartTime, startTime})),
+        std::runtime_error);
+    comaModel.setArcWiseDensityCorrectionArcStartTimes(arcStartTimes);
+    BOOST_CHECK(comaModel.getUseArcWiseDensityCorrection());
+    BOOST_CHECK_EQUAL(comaModel.getArcWiseDensityCorrectionParameterSize(), 14);
+    BOOST_CHECK_EQUAL(comaModel.getArcWiseDensityCorrectionParameterVector().rows(), 14);
+    BOOST_CHECK_SMALL(comaModel.getArcWiseDensityCorrectionParameterVector().norm(), 1.0e-15);
+
+    BOOST_CHECK_THROW(comaModel.setArcWiseDensityCorrectionParameterVector(Eigen::VectorXd::Zero(7)), std::runtime_error);
+
+    Eigen::VectorXd arcWiseCorrectionParameters = Eigen::VectorXd::Zero(14);
+    arcWiseCorrectionParameters(0) = std::log(2.0);
+    arcWiseCorrectionParameters(7) = std::log(0.25);
+    comaModel.setArcWiseDensityCorrectionParameterVector(arcWiseCorrectionParameters);
+
+    BOOST_CHECK_CLOSE(comaModel.getDensity(radius, longitude, latitude, firstArcTime),
+                      2.0 * firstArcNominalDensity,
+                      1.0e-10);
+    Eigen::MatrixXd arcWiseAccelerationPartial =
+        comaModel.getArcWiseDensityCorrectionAccelerationPartial(firstArcTime, currentAcceleration);
+    BOOST_CHECK_EQUAL(arcWiseAccelerationPartial.rows(), 3);
+    BOOST_CHECK_EQUAL(arcWiseAccelerationPartial.cols(), 14);
+    for (int parameterIndex = 0; parameterIndex < expectedMultipliers.rows(); ++parameterIndex)
+    {
+        BOOST_CHECK_SMALL(
+            (arcWiseAccelerationPartial.col(parameterIndex) - currentAcceleration * expectedMultipliers(parameterIndex)).norm(),
+            1.0e-15);
+        BOOST_CHECK_SMALL(arcWiseAccelerationPartial.col(7 + parameterIndex).norm(), 1.0e-15);
+    }
+
+    BOOST_CHECK_CLOSE(comaModel.getDensity(radius, longitude, latitude, secondArcTime),
+                      0.25 * secondArcNominalDensity,
+                      1.0e-10);
+    arcWiseAccelerationPartial =
+        comaModel.getArcWiseDensityCorrectionAccelerationPartial(secondArcTime, currentAcceleration);
+    for (int parameterIndex = 0; parameterIndex < expectedMultipliers.rows(); ++parameterIndex)
+    {
+        BOOST_CHECK_SMALL(arcWiseAccelerationPartial.col(parameterIndex).norm(), 1.0e-15);
+        BOOST_CHECK_SMALL(
+            (arcWiseAccelerationPartial.col(7 + parameterIndex) - currentAcceleration * expectedMultipliers(parameterIndex)).norm(),
+            1.0e-15);
+    }
+
+    comaModel.clearArcWiseDensityCorrectionArcStartTimes();
+    BOOST_CHECK(!comaModel.getUseArcWiseDensityCorrection());
+    BOOST_CHECK_EQUAL(comaModel.getArcWiseDensityCorrectionParameterSize(), 0);
+    BOOST_CHECK_CLOSE(comaModel.getDensity(radius, longitude, latitude, firstArcTime),
+                      firstArcNominalDensity,
+                      1.0e-10);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

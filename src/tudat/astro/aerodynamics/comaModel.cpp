@@ -1,8 +1,11 @@
 #include "tudat/astro/aerodynamics/comaModel.h"
 #include "tudat/astro/basic_astro/physicalConstants.h"
 #include "tudat/basics/utilityMacros.h"
+#include <algorithm>
 #include <stdexcept>
 #include <cmath>
+#include <iterator>
+#include <limits>
 #include <utility>
 
 #include "tudat/simulation/estimation_setup/observationSimulationSettings.h"
@@ -53,6 +56,7 @@ ComaModel::ComaModel( const simulation_setup::ComaPolyDataset& polyDataset,
     cachedLongitude_( 0.0 ),
     cachedFinalDensity_( 0.0 ),
     cachedDensityCorrectionMultipliers_( Eigen::VectorXd::Ones( 1 ) ),
+    cachedDensityCorrectionArcIndex_( 0 ),
     cachedFinalTemperature_( 0.0 ),
     interpolationPoint2D_( 2 ),
     interpolationPoint1D_( 1 ),
@@ -64,6 +68,8 @@ ComaModel::ComaModel( const simulation_setup::ComaPolyDataset& polyDataset,
     specificGasConstant_( physical_constants::MOLAR_GAS_CONSTANT / molecularWeight ),
     densityCorrectionHarmonicDegree_( 0 ),
     densityCorrectionParameters_( Eigen::VectorXd::Zero( 1 ) ),
+    useArcWiseDensityCorrection_( false ),
+    arcWiseDensityCorrectionParameters_( Eigen::VectorXd::Zero( 0 ) ),
     hasTemperatureDataset_( temperaturePolyDataset != nullptr ),
     isLog2Data_( isLog2Data ),
     polyDataset_( std::make_shared<simulation_setup::ComaPolyDataset>( polyDataset ) ),
@@ -142,6 +148,7 @@ ComaModel::ComaModel( const simulation_setup::ComaStokesDataset& stokesDataset,
     cachedLongitude_( 0.0 ),
     cachedFinalDensity_( 0.0 ),
     cachedDensityCorrectionMultipliers_( Eigen::VectorXd::Ones( 1 ) ),
+    cachedDensityCorrectionArcIndex_( 0 ),
     cachedFinalTemperature_( 0.0 ),
     interpolationPoint2D_( 2 ),
     interpolationPoint1D_( 1 ),
@@ -153,6 +160,8 @@ ComaModel::ComaModel( const simulation_setup::ComaStokesDataset& stokesDataset,
     specificGasConstant_( physical_constants::MOLAR_GAS_CONSTANT / molecularWeight ),
     densityCorrectionHarmonicDegree_( 0 ),
     densityCorrectionParameters_( Eigen::VectorXd::Zero( 1 ) ),
+    useArcWiseDensityCorrection_( false ),
+    arcWiseDensityCorrectionParameters_( Eigen::VectorXd::Zero( 0 ) ),
     hasTemperatureDataset_( temperatureStokesDataset != nullptr ),
     isLog2Data_( isLog2Data ),
     polyDataset_( nullptr ),
@@ -289,7 +298,22 @@ double ComaModel::getNumberDensity( const double radius,
 
     // Convert back to number density and apply optional log-density correction.
     cachedDensityCorrectionMultipliers_ = getDensityCorrectionMultipliers( longitude, time );
-    const double densityCorrection = std::exp( densityCorrectionParameters_.dot( cachedDensityCorrectionMultipliers_ ) );
+    double densityCorrectionExponent = 0.0;
+    if ( useArcWiseDensityCorrection_ )
+    {
+        cachedDensityCorrectionArcIndex_ = getArcWiseDensityCorrectionArcIndex( time );
+        const int singleArcParameterSize = getDensityCorrectionParameterSize( );
+        densityCorrectionExponent =
+                arcWiseDensityCorrectionParameters_
+                        .segment( cachedDensityCorrectionArcIndex_ * singleArcParameterSize, singleArcParameterSize )
+                        .dot( cachedDensityCorrectionMultipliers_ );
+    }
+    else
+    {
+        cachedDensityCorrectionArcIndex_ = 0;
+        densityCorrectionExponent = densityCorrectionParameters_.dot( cachedDensityCorrectionMultipliers_ );
+    }
+    const double densityCorrection = std::exp( densityCorrectionExponent );
     cachedFinalDensity_ = ( isLog2Data_ ? std::exp2( numberDensityRaw ) : numberDensityRaw ) * densityCorrection;
     cacheFlags_.densityValid = true;
 
@@ -310,6 +334,11 @@ void ComaModel::setDensityCorrectionHarmonicDegree( const int harmonicDegree )
 
     densityCorrectionHarmonicDegree_ = harmonicDegree;
     densityCorrectionParameters_ = Eigen::VectorXd::Zero( getDensityCorrectionParameterSize( ) );
+    if ( useArcWiseDensityCorrection_ )
+    {
+        arcWiseDensityCorrectionParameters_ =
+                Eigen::VectorXd::Zero( getArcWiseDensityCorrectionParameterSize( ) );
+    }
     cachedDensityCorrectionMultipliers_ = Eigen::VectorXd::Zero( getDensityCorrectionParameterSize( ) );
     cachedDensityCorrectionMultipliers_( 0 ) = 1.0;
     cacheFlags_.densityValid = false;
@@ -346,6 +375,96 @@ Eigen::MatrixXd ComaModel::getDensityCorrectionAccelerationPartial( const double
     for ( int parameterIndex = 0; parameterIndex < getDensityCorrectionParameterSize( ); ++parameterIndex )
     {
         accelerationPartial.col( parameterIndex ) =
+                currentAcceleration * cachedDensityCorrectionMultipliers_( parameterIndex );
+    }
+    return accelerationPartial;
+}
+
+void ComaModel::setArcWiseDensityCorrectionArcStartTimes( const std::vector< double >& arcStartTimes )
+{
+    if ( arcStartTimes.empty( ) )
+    {
+        throw std::runtime_error( "ComaModel: arc-wise density correction arc start times must not be empty" );
+    }
+
+    for ( unsigned int i = 1; i < arcStartTimes.size( ); ++i )
+    {
+        if ( arcStartTimes.at( i ) <= arcStartTimes.at( i - 1 ) )
+        {
+            throw std::runtime_error( "ComaModel: arc-wise density correction arc start times must be strictly increasing" );
+        }
+    }
+
+    arcWiseDensityCorrectionArcStartTimes_ = arcStartTimes;
+    useArcWiseDensityCorrection_ = true;
+    arcWiseDensityCorrectionParameters_ = Eigen::VectorXd::Zero( getArcWiseDensityCorrectionParameterSize( ) );
+    cachedDensityCorrectionArcIndex_ = 0;
+    cacheFlags_.densityValid = false;
+}
+
+void ComaModel::clearArcWiseDensityCorrectionArcStartTimes( )
+{
+    useArcWiseDensityCorrection_ = false;
+    arcWiseDensityCorrectionArcStartTimes_.clear( );
+    arcWiseDensityCorrectionParameters_ = Eigen::VectorXd::Zero( 0 );
+    cachedDensityCorrectionArcIndex_ = 0;
+    cacheFlags_.densityValid = false;
+}
+
+std::vector< double > ComaModel::getArcWiseDensityCorrectionArcStartTimes( ) const
+{
+    return arcWiseDensityCorrectionArcStartTimes_;
+}
+
+bool ComaModel::getUseArcWiseDensityCorrection( ) const
+{
+    return useArcWiseDensityCorrection_;
+}
+
+int ComaModel::getArcWiseDensityCorrectionParameterSize( ) const
+{
+    return static_cast< int >( arcWiseDensityCorrectionArcStartTimes_.size( ) ) * getDensityCorrectionParameterSize( );
+}
+
+Eigen::VectorXd ComaModel::getArcWiseDensityCorrectionParameterVector( ) const
+{
+    return arcWiseDensityCorrectionParameters_;
+}
+
+void ComaModel::setArcWiseDensityCorrectionParameterVector( const Eigen::VectorXd& densityCorrectionParameters )
+{
+    if ( !useArcWiseDensityCorrection_ )
+    {
+        throw std::runtime_error(
+                "ComaModel: arc-wise density correction arc start times must be set before setting arc-wise parameters" );
+    }
+
+    if ( densityCorrectionParameters.rows( ) != getArcWiseDensityCorrectionParameterSize( ) )
+    {
+        throw std::runtime_error( "ComaModel: arc-wise density correction parameter vector must have size " +
+                                  std::to_string( getArcWiseDensityCorrectionParameterSize( ) ) );
+    }
+
+    arcWiseDensityCorrectionParameters_ = densityCorrectionParameters;
+    cacheFlags_.densityValid = false;
+}
+
+Eigen::MatrixXd ComaModel::getArcWiseDensityCorrectionAccelerationPartial(
+        const double currentTime,
+        const Eigen::Vector3d& currentAcceleration ) const
+{
+    if ( !useArcWiseDensityCorrection_ )
+    {
+        throw std::runtime_error(
+                "ComaModel: arc-wise density correction arc start times must be set before requesting arc-wise partials" );
+    }
+
+    const int singleArcParameterSize = getDensityCorrectionParameterSize( );
+    Eigen::MatrixXd accelerationPartial = Eigen::MatrixXd::Zero( 3, getArcWiseDensityCorrectionParameterSize( ) );
+    const int arcIndex = getArcWiseDensityCorrectionArcIndex( currentTime );
+    for ( int parameterIndex = 0; parameterIndex < singleArcParameterSize; ++parameterIndex )
+    {
+        accelerationPartial.col( arcIndex * singleArcParameterSize + parameterIndex ) =
                 currentAcceleration * cachedDensityCorrectionMultipliers_( parameterIndex );
     }
     return accelerationPartial;
@@ -624,6 +743,26 @@ Eigen::VectorXd ComaModel::getDensityCorrectionMultipliers( const double longitu
         densityCorrectionMultipliers( 2 * degree ) = std::sin( degreeLocalSolarAngle );
     }
     return densityCorrectionMultipliers;
+}
+
+int ComaModel::getArcWiseDensityCorrectionArcIndex( const double time ) const
+{
+    if ( arcWiseDensityCorrectionArcStartTimes_.empty( ) )
+    {
+        throw std::runtime_error( "ComaModel: no arc-wise density correction arc start times have been set" );
+    }
+
+    if ( time < arcWiseDensityCorrectionArcStartTimes_.front( ) )
+    {
+        throw std::runtime_error(
+                "ComaModel: requested arc-wise density correction before the first arc start time" );
+    }
+
+    const auto upperBoundIterator =
+            std::upper_bound( arcWiseDensityCorrectionArcStartTimes_.begin( ),
+                              arcWiseDensityCorrectionArcStartTimes_.end( ),
+                              time );
+    return static_cast< int >( std::distance( arcWiseDensityCorrectionArcStartTimes_.begin( ), upperBoundIterator ) ) - 1;
 }
 
 //-----------------------------------------------------------------------------

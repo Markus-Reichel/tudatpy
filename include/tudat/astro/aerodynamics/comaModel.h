@@ -15,6 +15,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <vector>
 
 
 namespace tudat
@@ -213,6 +214,54 @@ public:
     Eigen::MatrixXd getDensityCorrectionAccelerationPartial( double currentTime,
                                                              const Eigen::Vector3d& currentAcceleration ) const;
 
+    /*!
+     * \brief Enable arc-wise log-density corrections and set the arc start times.
+     * \param arcStartTimes Start times of the arcs for which independent correction vectors are estimated.
+     */
+    void setArcWiseDensityCorrectionArcStartTimes( const std::vector< double >& arcStartTimes );
+
+    /*!
+     * \brief Disable arc-wise log-density corrections and return to the global correction vector.
+     */
+    void clearArcWiseDensityCorrectionArcStartTimes( );
+
+    /*!
+     * \brief Return the arc start times used by the arc-wise log-density correction.
+     */
+    std::vector< double > getArcWiseDensityCorrectionArcStartTimes( ) const;
+
+    /*!
+     * \brief Return whether arc-wise log-density corrections are enabled.
+     */
+    bool getUseArcWiseDensityCorrection( ) const;
+
+    /*!
+     * \brief Return the flattened size of the arc-wise log-density correction parameter vector.
+     */
+    int getArcWiseDensityCorrectionParameterSize( ) const;
+
+    /*!
+     * \brief Return flattened arc-wise log-density correction parameters.
+     *
+     * The ordering is [arc0_c0, arc0_a1, arc0_b1, ..., arc1_c0, arc1_a1, arc1_b1, ...].
+     */
+    Eigen::VectorXd getArcWiseDensityCorrectionParameterVector( ) const;
+
+    /*!
+     * \brief Set flattened arc-wise log-density correction parameters.
+     *
+     * The ordering is [arc0_c0, arc0_a1, arc0_b1, ..., arc1_c0, arc1_a1, arc1_b1, ...].
+     */
+    void setArcWiseDensityCorrectionParameterVector( const Eigen::VectorXd& densityCorrectionParameters );
+
+    /*!
+     * \brief Return analytical acceleration partials w.r.t. the arc-wise density correction parameters.
+     *
+     * Only the block belonging to the active arc at currentTime is nonzero.
+     */
+    Eigen::MatrixXd getArcWiseDensityCorrectionAccelerationPartial( double currentTime,
+                                                                    const Eigen::Vector3d& currentAcceleration ) const;
+
     //! Delete copy constructor and copy assignment operator (class contains unique_ptr members)
     ComaModel(const ComaModel&) = delete;
     ComaModel& operator=(const ComaModel&) = delete;
@@ -249,6 +298,9 @@ private:
 
     //! Cached correction basis [1, cos(local solar angle), sin(local solar angle), ...]
     mutable Eigen::VectorXd cachedDensityCorrectionMultipliers_;
+
+    //! Cached arc index for arc-wise density correction partials.
+    mutable int cachedDensityCorrectionArcIndex_;
 
     //! Cached final temperature result to avoid repeated calculations
     mutable double cachedFinalTemperature_;
@@ -306,6 +358,15 @@ private:
 
     //! Log-density correction parameters [c0, a1, b1, ..., aN, bN]
     Eigen::VectorXd densityCorrectionParameters_;
+
+    //! Flag indicating whether arc-wise density correction parameters are active.
+    bool useArcWiseDensityCorrection_;
+
+    //! Start times of arcs with independent density correction parameter vectors.
+    std::vector< double > arcWiseDensityCorrectionArcStartTimes_;
+
+    //! Flattened arc-wise log-density correction parameters.
+    Eigen::VectorXd arcWiseDensityCorrectionParameters_;
 
     //! Flag indicating whether temperature dataset was provided
     bool hasTemperatureDataset_;
@@ -447,6 +508,13 @@ private:
      * @return Correction multipliers for the selected harmonic degree.
      */
     Eigen::VectorXd getDensityCorrectionMultipliers( double longitude, double time ) const;
+
+    /*!
+     * @brief Return the active arc index for arc-wise density corrections.
+     * @param time Time at which the active correction arc is requested [s].
+     * @return Active arc index.
+     */
+    int getArcWiseDensityCorrectionArcIndex( double time ) const;
 
     /*!
      * @brief Initialize interpolators for Stokes coefficients (called only for STOKES_COEFFICIENTS data type)

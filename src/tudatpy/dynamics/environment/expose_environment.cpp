@@ -968,6 +968,43 @@ The correction parameter vector is resized to ``1 + 2 * degree`` and reset to ze
 Return the analytical aerodynamic acceleration partial with respect to the log-density
 correction parameters. The matrix has shape ``3 x (1 + 2 * degree)``.
 
+)doc" )
+            .def( "set_arc_wise_density_correction_arc_start_times",
+                  &ta::ComaModel::setArcWiseDensityCorrectionArcStartTimes,
+                  py::arg( "arc_start_times" ),
+                  R"doc(
+
+Enable independent arc-wise log-density correction vectors and set the arc start times.
+
+)doc" )
+            .def( "clear_arc_wise_density_correction_arc_start_times",
+                  &ta::ComaModel::clearArcWiseDensityCorrectionArcStartTimes,
+                  R"doc(Disable arc-wise log-density corrections and use the global correction vector.)doc" )
+            .def( "get_arc_wise_density_correction_arc_start_times",
+                  &ta::ComaModel::getArcWiseDensityCorrectionArcStartTimes,
+                  R"doc(Return the arc start times used by the arc-wise log-density correction.)doc" )
+            .def( "get_use_arc_wise_density_correction",
+                  &ta::ComaModel::getUseArcWiseDensityCorrection,
+                  R"doc(Return whether arc-wise log-density corrections are enabled.)doc" )
+            .def( "get_arc_wise_density_correction_parameter_size",
+                  &ta::ComaModel::getArcWiseDensityCorrectionParameterSize,
+                  R"doc(Return the flattened arc-wise correction parameter vector size.)doc" )
+            .def( "get_arc_wise_density_correction_parameters",
+                  &ta::ComaModel::getArcWiseDensityCorrectionParameterVector,
+                  R"doc(Return flattened arc-wise log-density correction parameters.)doc" )
+            .def( "set_arc_wise_density_correction_parameters",
+                  &ta::ComaModel::setArcWiseDensityCorrectionParameterVector,
+                  py::arg( "parameters" ),
+                  R"doc(Set flattened arc-wise log-density correction parameters.)doc" )
+            .def( "get_arc_wise_density_correction_acceleration_partial",
+                  &ta::ComaModel::getArcWiseDensityCorrectionAccelerationPartial,
+                  py::arg( "time" ),
+                  py::arg( "current_acceleration" ),
+                  R"doc(
+
+Return the analytical aerodynamic acceleration partial with respect to flattened
+arc-wise log-density correction parameters. Only the active arc block is nonzero.
+
 )doc" );
 
     py::class_< ta::AerodynamicCoefficientInterface, std::shared_ptr< ta::AerodynamicCoefficientInterface > >(
