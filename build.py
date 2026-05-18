@@ -518,19 +518,20 @@ class StubGenerator:
 
             # Handle special case for __init__.pyi
             if stub.name == "__init__.pyi":
-
-                shutil.copy(
-                    stub,
-                    self.stubs_dir / relative_path.parent / "extension.pyi",
-                )
+                dest = self.stubs_dir / relative_path.parent / "extension.pyi"
 
             # If the stub is not __init__.pyi, copy to the final directory
             # with name extension.pyi
             else:
-                shutil.copy(
-                    stub,
-                    self.stubs_dir / relative_path.with_suffix("") / "extension.pyi",
+                dest = (
+                    self.stubs_dir / relative_path.with_suffix("") / "extension.pyi"
                 )
+
+            # C++-only submodules (e.g. data.coma_model) have no Python source
+            # dir for __create_stubs_directory_structure to mirror, so create
+            # the destination directory on demand.
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(stub, dest)
 
         return None
 
@@ -733,7 +734,17 @@ class StubGenerator:
             / module_path.relative_to(self.stubs_dir)
             / "__init__.py"
         )
-        init = self.__parse_script(init_path)
+        if init_path.exists():
+            init = self.__parse_script(init_path)
+        else:
+            # C++-only submodule (e.g. data.coma_model) has no Python source
+            # __init__.py. Synthesize one that star-imports from its kernel
+            # extension; the rest of this method rewrites that into a
+            # `from .extension import *` stub.
+            kernel_module = "tudatpy.kernel." + ".".join(
+                module_path.relative_to(self.stubs_dir).parts
+            )
+            init = ast.parse(f"from {kernel_module} import *")
 
         # Initialize containers for the contents of the stub
         stub_body = []
