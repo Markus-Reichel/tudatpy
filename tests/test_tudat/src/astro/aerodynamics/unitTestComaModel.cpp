@@ -2,12 +2,17 @@
 #define BOOST_TEST_MAIN
 
 #include "tudat/astro/aerodynamics/exponentialAtmosphere.h"
+#include "tudat/astro/ephemerides/constantEphemeris.h"
+#include "tudat/astro/ephemerides/constantRotationalEphemeris.h"
 #include "tudat/simulation/environment_setup/createAtmosphereModel.h"
+#include "tudat/simulation/propagation_setup/createEnvironmentUpdater.h"
+#include "tudat/simulation/propagation_setup/propagationOutputSettings.h"
 #include "tudat/astro/aerodynamics/comaModel.h"
 #include "tudat/io/basicInputOutput.h"
 #include <boost/test/unit_test.hpp>
 #include <boost/test/unit_test.hpp>
 #include <boost/filesystem.hpp>
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 
@@ -182,7 +187,7 @@ struct StokesTestData
  *
  * Tests the core data model functionality including dataset creation,
  * coefficient storage/retrieval, and bounds checking. These tests verify
- * that the underlying data structure correctly manages spherical harmonic
+ * that the underlying data structure correctly manages spherical harmonicple
  * coefficient data.
  */
 BOOST_AUTO_TEST_SUITE(test_data_models)
@@ -465,9 +470,9 @@ BOOST_FIXTURE_TEST_CASE(test_stokes_dataset_reader_from_csv, TestDataPaths)
 
     // Verify metadata
     const auto& filesMeta = readDataset.files();
-    BOOST_CHECK_CLOSE(filesMeta[0].start_epoch, 2.015e9, 1e-6);
-    BOOST_CHECK_CLOSE(filesMeta[0].end_epoch, 2.0150864e9, 1e-6);
-    BOOST_CHECK_EQUAL(filesMeta[0].source_tag, "test_source");
+    BOOST_CHECK_CLOSE(filesMeta[0].startEpoch, 2.015e9, 1e-6);
+    BOOST_CHECK_CLOSE(filesMeta[0].endEpoch, 2.0150864e9, 1e-6);
+    BOOST_CHECK_EQUAL(filesMeta[0].sourceTag, "test_source");
 
     // Verify radii and longitudes
     const auto& readRadii = readDataset.radii();
@@ -567,12 +572,12 @@ BOOST_FIXTURE_TEST_CASE(test_stokes_dataset_reader_from_csv_folder, TestDataPath
 
     // Verify file metadata
     const auto& filesMeta = multiDataset.files();
-    BOOST_CHECK_CLOSE(filesMeta[0].start_epoch, 0.0, 1e-10);
-    BOOST_CHECK_CLOSE(filesMeta[0].end_epoch, 1.0, 1e-10);
-    BOOST_CHECK_EQUAL(filesMeta[0].source_tag, "test_file_1");
-    BOOST_CHECK_CLOSE(filesMeta[1].start_epoch, 1.0, 1e-10);
-    BOOST_CHECK_CLOSE(filesMeta[1].end_epoch, 2.0, 1e-10);
-    BOOST_CHECK_EQUAL(filesMeta[1].source_tag, "test_file_2");
+    BOOST_CHECK_CLOSE(filesMeta[0].startEpoch, 0.0, 1e-10);
+    BOOST_CHECK_CLOSE(filesMeta[0].endEpoch, 1.0, 1e-10);
+    BOOST_CHECK_EQUAL(filesMeta[0].sourceTag, "test_file_1");
+    BOOST_CHECK_CLOSE(filesMeta[1].startEpoch, 1.0, 1e-10);
+    BOOST_CHECK_CLOSE(filesMeta[1].endEpoch, 2.0, 1e-10);
+    BOOST_CHECK_EQUAL(filesMeta[1].sourceTag, "test_file_2");
 
     // Verify coefficient values from first file
     auto coeff_1_0_0 = multiDataset.getCoeff(0, 0, 0, 0, 0);
@@ -838,7 +843,7 @@ BOOST_FIXTURE_TEST_CASE(test_dataset_transformer, TestDataPaths)
 {
     const auto configs = getPolyDatasetConfigs();
     const std::vector<double> radii_m = {4000.0, 10000.0};
-    const std::vector<double> lons_deg = {0.0, 30.0};
+    const std::vector<double> longitudes_deg = {0.0, 30.0};
 
     for (const auto& config : configs)
     {
@@ -851,11 +856,11 @@ BOOST_FIXTURE_TEST_CASE(test_dataset_transformer, TestDataPaths)
             StokesTestData expectedData2 = StokesTestData::readFromFile(config.stokesFileLon30.string(), config.maxDegree);
 
             ComaStokesDataset stokesDataset = ComaDatasetTransformer::transformPolyToStokes(
-                polyDataset, radii_m, lons_deg);
+                polyDataset, radii_m, longitudes_deg);
 
             BOOST_CHECK_EQUAL(stokesDataset.nFiles(), 1);
             BOOST_CHECK_EQUAL(stokesDataset.nRadii(), radii_m.size());
-            BOOST_CHECK_EQUAL(stokesDataset.nLongitudes(), lons_deg.size());
+            BOOST_CHECK_EQUAL(stokesDataset.nLongitudes(), longitudes_deg.size());
             BOOST_CHECK_EQUAL(stokesDataset.nmax(), config.maxDegree);
 
             auto verifyCoefficients = [&](int radiusIndex, int longitudeIndex, const StokesTestData& expectedData)
@@ -891,18 +896,18 @@ BOOST_FIXTURE_TEST_CASE(test_dataset_transformer, TestDataPaths)
             verifyCoefficients(1, 1, expectedData2);
 
             ComaStokesDataset truncatedDataset = ComaDatasetTransformer::transformPolyToStokes(
-                polyDataset, radii_m, lons_deg, 6, 4);
+                polyDataset, radii_m, longitudes_deg, 6, 4);
 
             BOOST_CHECK_EQUAL(truncatedDataset.nmax(), 6);
 
             BOOST_CHECK_THROW(
                 ComaDatasetTransformer::transformPolyToStokes(
-                    polyDataset, radii_m, lons_deg, config.maxDegree + 5, config.maxOrder),
+                    polyDataset, radii_m, longitudes_deg, config.maxDegree + 5, config.maxOrder),
                 std::invalid_argument);
 
             BOOST_CHECK_THROW(
                 ComaDatasetTransformer::transformPolyToStokes(
-                    polyDataset, radii_m, lons_deg, config.maxDegree, config.maxOrder + 5),
+                    polyDataset, radii_m, longitudes_deg, config.maxDegree, config.maxOrder + 5),
                 std::invalid_argument);
         }
     }
@@ -926,7 +931,7 @@ BOOST_FIXTURE_TEST_CASE(test_stokes_dataset_creation_via_processor, TestDataPath
 {
     const auto configs = getPolyDatasetConfigs();
     const std::vector<double> radii_m = {4000.0, 10000.0};
-    const std::vector<double> lons_deg = {0.0, 30.0};
+    const std::vector<double> longitudes_deg = {0.0, 30.0};
 
     for (const auto& config : configs)
     {
@@ -938,11 +943,11 @@ BOOST_FIXTURE_TEST_CASE(test_stokes_dataset_creation_via_processor, TestDataPath
             const int maxDegree = config.maxDegree;
             const int maxOrder = config.maxOrder;
 
-            const ComaStokesDataset stokesDataset = processor.createSHDataset(radii_m, lons_deg, maxDegree, maxOrder);
+            const ComaStokesDataset stokesDataset = processor.createSHDataset(radii_m, longitudes_deg, maxDegree, maxOrder);
 
             BOOST_CHECK_EQUAL(stokesDataset.nFiles(), 1);
             BOOST_CHECK_EQUAL(stokesDataset.nRadii(), radii_m.size());
-            BOOST_CHECK_EQUAL(stokesDataset.nLongitudes(), lons_deg.size());
+            BOOST_CHECK_EQUAL(stokesDataset.nLongitudes(), longitudes_deg.size());
             BOOST_CHECK_EQUAL(stokesDataset.nmax(), maxDegree);
 
             StokesTestData expectedData1 = StokesTestData::readFromFile(config.stokesFileLon0.string(), maxDegree);
@@ -1007,6 +1012,53 @@ BOOST_AUTO_TEST_SUITE_END()
  */
 BOOST_AUTO_TEST_SUITE(test_coma_model)
 
+BOOST_AUTO_TEST_CASE(test_solar_longitude_dependent_variable_update_requirements)
+{
+    const std::string cometName = "Churyumov_Gerasimenko";
+    const std::string sunName = "Sun";
+
+    SystemOfBodies bodies("SSB", "ECLIPJ2000");
+    bodies.createEmptyBody(cometName);
+    bodies.createEmptyBody(sunName);
+
+    bodies.at(cometName)->setEphemeris(std::make_shared<ephemerides::ConstantEphemeris>(Eigen::Vector6d::Zero()));
+    bodies.at(cometName)->setRotationalEphemeris(
+        std::make_shared<ephemerides::ConstantRotationalEphemeris>(
+            Eigen::Quaterniond::Identity(), "ECLIPJ2000", "Churyumov_Gerasimenko_Fixed"));
+
+    Eigen::Vector6d sunState = Eigen::Vector6d::Zero();
+    sunState(0) = 1.0E11;
+    bodies.at(sunName)->setEphemeris(std::make_shared<ephemerides::ConstantEphemeris>(sunState));
+
+    const std::shared_ptr<propagators::SingleDependentVariableSaveSettings> dependentVariableSettings =
+        propagators::solarLongitudeDependentVariable(cometName);
+
+    const std::map<propagators::EnvironmentModelsToUpdate, std::vector<std::string>> updateSettings =
+        propagators::createEnvironmentUpdaterSettingsForDependentVariables(dependentVariableSettings, bodies);
+
+    BOOST_CHECK_NO_THROW(propagators::checkValidityOfRequiredEnvironmentUpdates(updateSettings, bodies));
+    BOOST_CHECK_EQUAL(updateSettings.count(propagators::vehicle_flight_conditions_update), 0);
+
+    const auto containsBody = [](const std::vector<std::string>& bodyList, const std::string& bodyName) {
+        return std::find(bodyList.begin(), bodyList.end(), bodyName) != bodyList.end();
+    };
+
+    BOOST_REQUIRE_EQUAL(updateSettings.count(propagators::body_translational_state_update), 1);
+    const std::vector<std::string>& translationalUpdates =
+        updateSettings.at(propagators::body_translational_state_update);
+    BOOST_CHECK_EQUAL(translationalUpdates.size(), 2);
+    BOOST_CHECK(containsBody(translationalUpdates, cometName));
+    BOOST_CHECK(containsBody(translationalUpdates, sunName));
+    BOOST_CHECK(!containsBody(translationalUpdates, ""));
+
+    BOOST_REQUIRE_EQUAL(updateSettings.count(propagators::body_rotational_state_update), 1);
+    const std::vector<std::string>& rotationalUpdates = updateSettings.at(propagators::body_rotational_state_update);
+    BOOST_CHECK_EQUAL(rotationalUpdates.size(), 1);
+    BOOST_CHECK(containsBody(rotationalUpdates, cometName));
+    BOOST_CHECK(!containsBody(rotationalUpdates, sunName));
+    BOOST_CHECK(!containsBody(rotationalUpdates, ""));
+}
+
 /**
  * @brief Verifies ComaModel::getNumberDensity returns correct log2(density) values.
  *
@@ -1037,9 +1089,9 @@ BOOST_FIXTURE_TEST_CASE(test_coma_model_number_density, TestDataPaths)
     // Create Stokes dataset from polynomial dataset
     // Use the test points from both test files as the grid
     const std::vector<double> radii_m = {4000.0, 10000.0};  // 4 km, 10 km
-    const std::vector<double> lons_deg = {0.0, 30.0};       // 0°, 30°
+    const std::vector<double> longitudes_deg = {0.0, 30.0};       // 0°, 30°
     const ComaModelFileProcessor processor(files);
-    const ComaStokesDataset stokesDataset = processor.createSHDataset(radii_m, lons_deg, maxDegree, maxOrder);
+    const ComaStokesDataset stokesDataset = processor.createSHDataset(radii_m, longitudes_deg, maxDegree, maxOrder);
 
     // Test with both polynomial and Stokes datasets
     for (int datasetType = 0; datasetType < 2; ++datasetType)
@@ -1375,7 +1427,8 @@ BOOST_FIXTURE_TEST_CASE(test_coma_model_number_density, TestDataPaths)
 BOOST_FIXTURE_TEST_CASE(test_coma_model_density_validation_from_python, TestDataPaths)
 {
     // This test validates the entire pipeline by using reference values computed from the Python interface.
-    // The reference_values.txt file contains: time, radial distance, latitude, longitude, solar longitude, and density.
+    // The reference_values.txt file contains: time, radial distance, latitude, longitude, solar longitude,
+    // density, and wind velocity components. This test only uses the density column.
     // We use these values as input to calculate density with the verified code and validate against the reference density.
 
     // Load polynomial coefficients from test data file
@@ -1396,15 +1449,15 @@ BOOST_FIXTURE_TEST_CASE(test_coma_model_density_validation_from_python, TestData
         radii_m.push_back(4000.0 + i * (10000.0 - 4000.0) / 99.0);
     }
 
-    std::vector<double> lons_deg;
+    std::vector<double> longitudes_deg;
     for (int i = 0; i < 37; ++i)
     {
-        lons_deg.push_back(i * 360.0 / 36.0);
+        longitudes_deg.push_back(i * 360.0 / 36.0);
     }
 
-    const ComaStokesDataset stokesDataset = processor.createSHDataset(radii_m, lons_deg, maxDegree, maxOrder);
+    const ComaStokesDataset stokesDataset = processor.createSHDataset(radii_m, longitudes_deg, maxDegree, maxOrder);
 
-    const boost::filesystem::path referenceFile = dataDir / "density" / "reference_values.txt";
+    const boost::filesystem::path referenceFile = dataDir / "reference_values.txt";
 
     // Read reference values file
     std::ifstream file(referenceFile.string());
@@ -1756,7 +1809,7 @@ BOOST_FIXTURE_TEST_CASE(test_poly_coef_processor_create_sh_dataset, TestDataPath
 
     // Use the same test points as in test_stokes_coefficients_evaluator
     const std::vector<double> radii_m = {4000.0, 10000.0};
-    const std::vector<double> lons_deg = {0.0, 30.0};
+    const std::vector<double> longitudes_deg = {0.0, 30.0};
 
     const boost::filesystem::path testFile1 = stokesFileLegacyLon0;
     const boost::filesystem::path testFile2 = stokesFileLegacyLon30;
@@ -1764,7 +1817,7 @@ BOOST_FIXTURE_TEST_CASE(test_poly_coef_processor_create_sh_dataset, TestDataPath
     StokesTestData expectedData2 = StokesTestData::readFromFile(testFile2.string(), 10);
 
     // Test with auto-selected maxima
-    const ComaStokesDataset dataset = processor.createSHDataset(radii_m, lons_deg);
+    const ComaStokesDataset dataset = processor.createSHDataset(radii_m, longitudes_deg);
 
     BOOST_CHECK_EQUAL(dataset.nFiles(), 1);
     BOOST_CHECK_EQUAL(dataset.nRadii(), 2);
@@ -1807,7 +1860,7 @@ BOOST_FIXTURE_TEST_CASE(test_poly_coef_processor_create_sh_files, TestDataPaths)
     ComaModelFileProcessor processor(files);
 
     std::vector<double> radii_m = {6000.0, 10000.0};
-    std::vector<double> lons_deg = {0.0, 30.0};
+    std::vector<double> longitudes_deg = {0.0, 30.0};
 
     // Clean output directory
     if (boost::filesystem::exists(outputDir))
@@ -1816,7 +1869,7 @@ BOOST_FIXTURE_TEST_CASE(test_poly_coef_processor_create_sh_files, TestDataPaths)
     }
 
     // Generate CSV files
-    processor.createSHFiles(outputDir.string(), radii_m, lons_deg);
+    processor.createSHFiles(outputDir.string(), radii_m, longitudes_deg);
 
     // Check that file was created
     boost::filesystem::path expectedFile = outputDir / "stokes_file0.csv";
@@ -1869,17 +1922,17 @@ BOOST_FIXTURE_TEST_CASE(test_sh_processor_from_existing_files, TestDataPaths)
     ComaModelFileProcessor processor(files);
 
     std::vector<double> radii_m = {6000.0, 10000.0};
-    std::vector<double> lons_deg = {0.0, 30.0};
+    std::vector<double> longitudes_deg = {0.0, 30.0};
 
     // First, create the original SH dataset for comparison
-    ComaStokesDataset originalDataset = processor.createSHDataset(radii_m, lons_deg, 8, 6);
+    ComaStokesDataset originalDataset = processor.createSHDataset(radii_m, longitudes_deg, 8, 6);
 
     // Create SH files directory
     boost::filesystem::path shFilesDir = outputDir / "sh_files_test";
     boost::filesystem::create_directories(shFilesDir);
 
     // Generate CSV files using createSHFiles
-    processor.createSHFiles(shFilesDir.string(), radii_m, lons_deg, 8, 6);
+    processor.createSHFiles(shFilesDir.string(), radii_m, longitudes_deg, 8, 6);
 
     // Verify files were created
     boost::filesystem::path expectedFile = shFilesDir / "stokes_file0.csv";
@@ -1993,21 +2046,21 @@ BOOST_FIXTURE_TEST_CASE(test_poly_coef_processor_validation, TestDataPaths)
     const ComaModelFileProcessor processor(files);
 
     const std::vector<double> radii_m = {6000.0};
-    const std::vector<double> lons_deg = {30.0};
+    const std::vector<double> longitudes_deg = {30.0};
 
     // Test with invalid degree/order requests
     BOOST_CHECK_THROW(
-        processor.createSHDataset(radii_m, lons_deg, 15, 10),
+        processor.createSHDataset(radii_m, longitudes_deg, 15, 10),
         std::invalid_argument);
 
     BOOST_CHECK_THROW(
-        processor.createSHDataset(radii_m, lons_deg, 10, 15),
+        processor.createSHDataset(radii_m, longitudes_deg, 10, 15),
         std::invalid_argument);
 
     // Test with empty inputs
     const std::vector<double> emptyVec;
     BOOST_CHECK_THROW(
-        processor.createSHDataset(emptyVec, lons_deg),
+        processor.createSHDataset(emptyVec, longitudes_deg),
         std::invalid_argument);
 
     BOOST_CHECK_THROW(
@@ -2083,17 +2136,17 @@ BOOST_FIXTURE_TEST_CASE(test_processor_file_type_behavior, TestDataPaths)
     const std::vector<std::string> files = {testFile.string()};
     ComaModelFileProcessor polyProcessor(files);
     std::vector<double> radii_m = {6000.0, 10000.0};  // Need at least 2 radii for interpolation
-    std::vector<double> lons_deg = {0.0, 30.0};       // Need at least 2 longitudes for interpolation
+    std::vector<double> longitudes_deg = {0.0, 30.0};       // Need at least 2 longitudes for interpolation
 
     boost::filesystem::path shTestDir = outputDir / "file_type_test";
     boost::filesystem::create_directories(shTestDir);
-    polyProcessor.createSHFiles(shTestDir.string(), radii_m, lons_deg, 5, 5);
+    polyProcessor.createSHFiles(shTestDir.string(), radii_m, longitudes_deg, 5, 5);
 
     // Test poly processor behavior
     ComaModelFileProcessor polyProc(files);
     BOOST_CHECK_EQUAL(polyProc.getFileType(), ComaModelFileProcessor::FileType::PolyCoefficients);
     BOOST_CHECK_NO_THROW(polyProc.createPolyCoefDataset());
-    BOOST_CHECK_NO_THROW(polyProc.createSHDataset(radii_m, lons_deg));
+    BOOST_CHECK_NO_THROW(polyProc.createSHDataset(radii_m, longitudes_deg));
 
     // Test SH processor behavior
     ComaModelFileProcessor shProc(shTestDir.string());
@@ -2107,7 +2160,7 @@ BOOST_FIXTURE_TEST_CASE(test_processor_file_type_behavior, TestDataPaths)
 
     // Test that parameterized version throws error on SH processor
     BOOST_CHECK_THROW(shProc.createSHDataset({1000.0}, {45.0}), std::runtime_error);
-    BOOST_CHECK_THROW(shProc.createSHDataset(radii_m, lons_deg), std::runtime_error);
+    BOOST_CHECK_THROW(shProc.createSHDataset(radii_m, longitudes_deg), std::runtime_error);
 
     // Test that parameterless version throws error on Poly processor
     BOOST_CHECK_THROW(polyProc.createSHDataset(), std::runtime_error);
@@ -2154,8 +2207,8 @@ BOOST_FIXTURE_TEST_CASE(test_full_pipeline, TestDataPaths)
 
     // Step 2: Transform to Stokes dataset
     std::vector<double> radii_m = {6000.0, 10000.0};
-    std::vector<double> lons_deg = {0.0, 30.0};
-    ComaStokesDataset stokesDataset = processor.createSHDataset(radii_m, lons_deg, 8, 6);
+    std::vector<double> longitudes_deg = {0.0, 30.0};
+    ComaStokesDataset stokesDataset = processor.createSHDataset(radii_m, longitudes_deg, 8, 6);
 
     BOOST_CHECK_EQUAL(stokesDataset.nmax(), 8);
     BOOST_CHECK_LE(stokesDataset.nCoeffs(), (8+1)*(8+2)/2);
@@ -2202,19 +2255,19 @@ BOOST_FIXTURE_TEST_CASE(test_full_pipeline, TestDataPaths)
 
 BOOST_AUTO_TEST_SUITE_END()
 
-// ==================== SphericalHarmonicsCalculator Tests ====================
+// ==================== SurfaceSphericalHarmonicsCalculator Tests ====================
 
 /**
- * @brief Test suite for SphericalHarmonicsCalculator surface evaluation.
+ * @brief Test suite for SurfaceSphericalHarmonicsCalculator surface evaluation.
  *
- * Tests the SphericalHarmonicsCalculator class which computes spherical harmonic
+ * Tests the SurfaceSphericalHarmonicsCalculator class which computes spherical harmonic
  * expansions at specific latitude/longitude coordinates. Validates against
  * reference residual data from pre-computed test files.
  */
 BOOST_AUTO_TEST_SUITE(test_spherical_harmonics_calculator)
 
 /**
- * @brief Verifies SphericalHarmonicsCalculator::calculateSurfaceSphericalHarmonics computes correct values.
+ * @brief Verifies SurfaceSphericalHarmonicsCalculator::calculateSurfaceSphericalHarmonics computes correct values.
  *
  * Input/Setup:
  * - Reads polynomial coefficients and computes Stokes coefficients
@@ -2243,8 +2296,8 @@ BOOST_FIXTURE_TEST_CASE(test_calculate_surface_spherical_harmonics, TestDataPath
     const int maxDegree = 10;
     const int maxOrder = 10;
 
-    // Create SphericalHarmonicsCalculator instance
-    SphericalHarmonicsCalculator calculator;
+    // Create SurfaceSphericalHarmonicsCalculator instance
+    SurfaceSphericalHarmonicsCalculator calculator;
 
     // ========== Test Case 1: solar longitude = 0°, radius = 4 km ==========
     {

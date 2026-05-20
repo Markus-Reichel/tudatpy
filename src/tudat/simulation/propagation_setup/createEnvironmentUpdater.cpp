@@ -1305,10 +1305,9 @@ std::map< propagators::EnvironmentModelsToUpdate, std::vector< std::string > > c
             variablesToUpdate[ body_mass_distribution_update ].push_back( dependentVariableSaveSettings->associatedBody_ );
             break;
         case solar_longitude:
-            variablesToUpdate[ vehicle_flight_conditions_update ].push_back( dependentVariableSaveSettings->associatedBody_ );
-            variablesToUpdate[ body_rotational_state_update ].push_back( dependentVariableSaveSettings->secondaryBody_ );
+            variablesToUpdate[ body_rotational_state_update ].push_back( dependentVariableSaveSettings->associatedBody_ );
             variablesToUpdate[ body_translational_state_update ].push_back( dependentVariableSaveSettings->associatedBody_ );
-            variablesToUpdate[ body_translational_state_update ].push_back( dependentVariableSaveSettings->secondaryBody_ );
+            variablesToUpdate[ body_translational_state_update ].push_back( "Sun" );
             break;
         case number_density:
             variablesToUpdate[ vehicle_flight_conditions_update ].push_back( dependentVariableSaveSettings->associatedBody_ );
@@ -1343,6 +1342,9 @@ std::map< propagators::EnvironmentModelsToUpdate, std::vector< std::string > > c
         case full_body_paneled_geometry:
             break;
         case aerodynamic_coefficients:
+            break;
+        case proper_time_rate_kinematic_term:
+        case proper_time_rate_potential_term:
             break;
         default:
             throw std::runtime_error( "Error when getting environment updates for dependent variables, parameter " +
