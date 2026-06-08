@@ -256,8 +256,7 @@ void expose_environment( py::module& m )
          :type: str
       )doc" );
 
-    py::class_< tudat::TimeEphemeris, std::shared_ptr< tudat::TimeEphemeris > >(
-            m, "TimeEphemeris", R"doc(
+    py::class_< tudat::TimeEphemeris, std::shared_ptr< tudat::TimeEphemeris > >( m, "TimeEphemeris", R"doc(
 
          Relativistic time-scale converter for a body (and optional reference points on bodies,
          such as ground stations).
@@ -303,11 +302,10 @@ void expose_environment( py::module& m )
 
       )doc" )
             .def( "get_time_difference",
-                  static_cast< double ( tudat::TimeEphemeris::* )(
-                      const tudat::basic_astrodynamics::TimeScales,
-                      const tudat::basic_astrodynamics::TimeScales,
-                      const double,
-                      const std::string& ) >( &tudat::TimeEphemeris::getTimeDifference ),
+                  static_cast< double ( tudat::TimeEphemeris::* )( const tudat::basic_astrodynamics::TimeScales,
+                                                                   const tudat::basic_astrodynamics::TimeScales,
+                                                                   const double,
+                                                                   const std::string& ) >( &tudat::TimeEphemeris::getTimeDifference ),
                   py::arg( "input_scale" ),
                   py::arg( "output_scale" ),
                   py::arg( "input_time" ),
@@ -334,11 +332,11 @@ void expose_environment( py::module& m )
 
       )doc" )
             .def( "get_time_difference_from_time",
-                  static_cast< tudat::Time ( tudat::TimeEphemeris::* )(
-                      const tudat::basic_astrodynamics::TimeScales,
-                      const tudat::basic_astrodynamics::TimeScales,
-                      const tudat::Time,
-                      const std::string& ) >( &tudat::TimeEphemeris::getTimeDifference< tudat::Time > ),
+                  static_cast< tudat::Time ( tudat::TimeEphemeris::* )( const tudat::basic_astrodynamics::TimeScales,
+                                                                        const tudat::basic_astrodynamics::TimeScales,
+                                                                        const tudat::Time,
+                                                                        const std::string& ) >(
+                          &tudat::TimeEphemeris::getTimeDifference< tudat::Time > ),
                   py::arg( "input_scale" ),
                   py::arg( "output_scale" ),
                   py::arg( "input_time" ),
@@ -701,8 +699,8 @@ float
     py::class_< tudat::environment::TabulatedIonosphereModel,
                 std::shared_ptr< tudat::environment::TabulatedIonosphereModel >,
                 tudat::environment::IonosphereModel >( m,
-                "TabulatedIonosphereModel",
-                R"doc(
+                                                       "TabulatedIonosphereModel",
+                                                       R"doc(
 
 Ionospheric model backed by tabulated IONEX global ionosphere map data.
 
@@ -2338,17 +2336,18 @@ arc-wise log-density correction parameters. Only the active arc block is nonzero
          :type: EarthOrientationAnglesCalculator
 
      )doc" )
-            .def( "get_rotation_between_intermediate_frames",
-                  []( te::GcrsToItrsRotationModel& self,
-                      const te::EarthOrientationIntermediateFrame originalFrame,
-                      const te::EarthOrientationIntermediateFrame targetFrame,
-                      const double epoch ) {
-                      return self.getRotationBetweenIntermediateFrames( originalFrame, targetFrame, epoch ).toRotationMatrix( );
-                  },
-                  py::arg( "original_frame" ),
-                  py::arg( "target_frame" ),
-                  py::arg( "epoch" ),
-                  R"doc(
+            .def(
+                    "get_rotation_between_intermediate_frames",
+                    []( te::GcrsToItrsRotationModel& self,
+                        const te::EarthOrientationIntermediateFrame originalFrame,
+                        const te::EarthOrientationIntermediateFrame targetFrame,
+                        const double epoch ) {
+                        return self.getRotationBetweenIntermediateFrames( originalFrame, targetFrame, epoch ).toRotationMatrix( );
+                    },
+                    py::arg( "original_frame" ),
+                    py::arg( "target_frame" ),
+                    py::arg( "epoch" ),
+                    R"doc(
 
          Function to compute a rotation matrix between two IERS Earth-orientation intermediate frames.
 
@@ -2756,6 +2755,13 @@ arc-wise log-density correction parameters. Only the active arc block is nonzero
     py::class_< tgs::StationFrequencyInterpolator, std::shared_ptr< tgs::StationFrequencyInterpolator > >(
             m, "TransmittingFrequencyCalculator", R"doc(No documentation found.)doc" );
 
+    py::enum_< tgs::FrequencyGapHandling >( m, "FrequencyGapHandling" )
+            .value( "extrapolate_at_gaps", tgs::extrapolate_at_gaps )
+            .value( "throw_exception_at_gaps", tgs::throw_exception_at_gaps )
+            .value( "print_error_at_gaps", tgs::print_error_at_gaps )
+            .value( "print_error_once_at_gaps", tgs::print_error_once_at_gaps )
+            .export_values( );
+
     py::class_< tgs::ConstantFrequencyInterpolator,
                 std::shared_ptr< tgs::ConstantFrequencyInterpolator >,
                 tgs::StationFrequencyInterpolator >( m, "ConstantTransmittingFrequencyCalculator" )
@@ -2767,11 +2773,13 @@ arc-wise log-density correction parameters. Only the active arc block is nonzero
             .def( py::init< const std::vector< tudat::Time >&,
                             const std::vector< tudat::Time >&,
                             const std::vector< double >&,
-                            const std::vector< double >& >( ),
+                            const std::vector< double >&,
+                            const tgs::FrequencyGapHandling >( ),
                   py::arg( "start_times" ),
                   py::arg( "end_times" ),
                   py::arg( "ramp_rates" ),
-                  py::arg( "start_frequency" ) )
+                  py::arg( "start_frequency" ),
+                  py::arg( "gap_handling" ) = tgs::extrapolate_at_gaps )
             .def_property_readonly( "start_times", &tgs::PiecewiseLinearFrequencyInterpolator::getStartTimes )
             .def_property_readonly( "end_times", &tgs::PiecewiseLinearFrequencyInterpolator::getEndTimes )
             .def_property_readonly( "ramp_rates", &tgs::PiecewiseLinearFrequencyInterpolator::getRampRates )
@@ -3188,9 +3196,9 @@ arc-wise log-density correction parameters. Only the active arc block is nonzero
         :type: list[RadiationPressureTargetModel]
 
      )doc" )
-    .def_property_readonly( "time_ephemeris",
-      &tss::Body::getTimeScaleConverter,
-      R"doc(
+            .def_property_readonly( "time_ephemeris",
+                                    &tss::Body::getTimeScaleConverter,
+                                    R"doc(
 
          Object defining the relativistic time conversion model of this body, used to convert between
          barycentric coordinate time, body-centered coordinate time and proper time.
@@ -3261,29 +3269,26 @@ arc-wise log-density correction parameters. Only the active arc block is nonzero
          :type: dict[str,GroundStation]
       )doc" );
 
-    py::class_< tss::SpaceTimeProperties, std::shared_ptr< tss::SpaceTimeProperties > >(
-            m, "SpaceTimeProperties", R"doc(
+    py::class_< tss::SpaceTimeProperties, std::shared_ptr< tss::SpaceTimeProperties > >( m, "SpaceTimeProperties", R"doc(
 
          Space-time properties associated with a :class:`~SystemOfBodies`.
          This container stores the PPN parameter set, the equivalence-principle
          LPI-violation parameter, and the internally used base metric.
 
       )doc" )
-            .def_property(
-                    "ppn_parameter_set",
-                    &tss::SpaceTimeProperties::getPpnParameterSet,
-                    &tss::SpaceTimeProperties::setPpnParameterSet,
-                    R"doc(
+            .def_property( "ppn_parameter_set",
+                           &tss::SpaceTimeProperties::getPpnParameterSet,
+                           &tss::SpaceTimeProperties::setPpnParameterSet,
+                           R"doc(
 
          PPN parameter set used by models built from this environment.
 
          :type: PPNParameterSet
       )doc" )
-            .def_property(
-                    "equivalence_principle_lpi_violation_parameter",
-                    &tss::SpaceTimeProperties::getEquivalencePrincipleLpiViolationParameter,
-                    &tss::SpaceTimeProperties::setEquivalencePrincipleLpiViolationParameter,
-                    R"doc(
+            .def_property( "equivalence_principle_lpi_violation_parameter",
+                           &tss::SpaceTimeProperties::getEquivalencePrincipleLpiViolationParameter,
+                           &tss::SpaceTimeProperties::setEquivalencePrincipleLpiViolationParameter,
+                           R"doc(
 
          Equivalence-principle local-position-invariance violation parameter.
 
@@ -3291,10 +3296,7 @@ arc-wise log-density correction parameters. Only the active arc block is nonzero
       )doc" )
             .def_property_readonly(
                     "has_base_metric",
-                    []( const tss::SpaceTimeProperties& properties )
-                    {
-                        return ( properties.getBaseMetric( ) != nullptr );
-                    },
+                    []( const tss::SpaceTimeProperties& properties ) { return ( properties.getBaseMetric( ) != nullptr ); },
                     R"doc(
 
          **read-only**
@@ -3524,10 +3526,9 @@ arc-wise log-density correction parameters. Only the active arc block is nonzero
          Common global frame origin for all bodies in this SystemOfBodies, described in more detail `here <https://docs.tudat.space/en/latest/_src_user_guide/state_propagation/environment_setup/frames_in_environment.html#global-origin>`__.
 
      )doc" )
-            .def_property_readonly(
-                    "space_time_properties",
-                    &tss::SystemOfBodies::getSpaceTimeProperties,
-                    R"doc(
+            .def_property_readonly( "space_time_properties",
+                                    &tss::SystemOfBodies::getSpaceTimeProperties,
+                                    R"doc(
 
          Space-time properties container used by models created from this system of bodies.
          This is the canonical access point for PPN parameters and the
