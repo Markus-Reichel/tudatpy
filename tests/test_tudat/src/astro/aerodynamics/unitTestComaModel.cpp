@@ -1514,7 +1514,7 @@ BOOST_FIXTURE_TEST_CASE( test_coma_model_density_correction_parameters, TestData
 
     ComaModel comaModel( stokesDataset, molecularWeight, sunStateFunction, cometStateFunction, cometRotationFunction, maxDegree, maxOrder );
 
-    const double time = 0.5 * ( stokesDataset.files( ).at( 0 ).start_epoch + stokesDataset.files( ).at( 0 ).end_epoch );
+    const double time = 0.5 * ( stokesDataset.files( ).at( 0 ).startEpoch + stokesDataset.files( ).at( 0 ).endEpoch );
     const double radius = 5000.0;
     const double longitude = 0.25;
     const double latitude = 0.1;
@@ -1571,8 +1571,8 @@ BOOST_FIXTURE_TEST_CASE( test_coma_model_density_correction_parameters, TestData
     }
 
     comaModel.setDensityCorrectionParameterVector( Eigen::VectorXd::Zero( 7 ) );
-    const double startTime = stokesDataset.files( ).at( 0 ).start_epoch;
-    const double endTime = stokesDataset.files( ).at( 0 ).end_epoch;
+    const double startTime = stokesDataset.files( ).at( 0 ).startEpoch;
+    const double endTime = stokesDataset.files( ).at( 0 ).endEpoch;
     const double firstArcTime = startTime + 0.25 * ( endTime - startTime );
     const double secondArcTime = startTime + 0.75 * ( endTime - startTime );
     const double secondArcStartTime = startTime + 0.5 * ( endTime - startTime );
