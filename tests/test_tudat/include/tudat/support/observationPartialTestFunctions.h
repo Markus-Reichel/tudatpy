@@ -19,6 +19,7 @@
 #include "tudat/io/basicInputOutput.h"
 #include "tudat/interface/spice/spiceInterface.h"
 
+#include "tudat/astro/basic_astro/oblateSpheroidBodyShapeModel.h"
 #include "tudat/astro/basic_astro/sphericalBodyShapeModel.h"
 #include "tudat/astro/ephemerides/constantEphemeris.h"
 #include "tudat/astro/observation_models/lightTimeSolution.h"
@@ -51,7 +52,8 @@ SystemOfBodies setupEnvironment( const std::vector< std::pair< std::string, std:
                                  const bool useConstantEphemerides = 1,
                                  const double gravitationalParameterScaling = 1.0,
                                  const bool useConstantRotationalEphemeris = false,
-                                 const bool moveMarsToMoon = false );
+                                 const bool moveMarsToMoon = false,
+                                 const bool useOblateEarthShape = false );
 
 //! Function to create estimated parameters for general observation partial tests.
 std::shared_ptr< EstimatableParameterSet< double > > createEstimatableParameters( const SystemOfBodies& bodies,
@@ -218,6 +220,21 @@ void testObservationPartials(
         }
 
         if( observableType == observation_models::doppler_measured_frequency && linkEndIterator->first != receiver )
+        {
+            runSimulation = false;
+        }
+
+        if( observableType == observation_models::one_way_doppler_measured_frequency && linkEndIterator->first != receiver )
+        {
+            runSimulation = false;
+        }
+
+        if( observableType == observation_models::differenced_frequency_of_arrival && linkEndIterator->first != receiver )
+        {
+            runSimulation = false;
+        }
+
+        if( observableType == observation_models::pixel_coordinates && linkEndIterator->first != receiver )
         {
             runSimulation = false;
         }

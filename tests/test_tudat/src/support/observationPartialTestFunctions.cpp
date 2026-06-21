@@ -41,7 +41,8 @@ SystemOfBodies setupEnvironment( const std::vector< std::pair< std::string, std:
                                  const bool useConstantEphemerides,
                                  const double gravitationalParameterScaling,
                                  const bool useConstantRotationalEphemeris,
-                                 const bool moveMarsToMoon )
+                                 const bool moveMarsToMoon,
+                                 const bool useOblateEarthShape )
 {
     // Load spice kernels.
     spice_interface::loadStandardSpiceKernels( );
@@ -53,8 +54,16 @@ SystemOfBodies setupEnvironment( const std::vector< std::pair< std::string, std:
     bodies.createEmptyBody( "Moon" );
     bodies.createEmptyBody( "Sun" );
 
-    bodies.at( "Earth" )->setShapeModel(
-            std::make_shared< basic_astrodynamics::SphericalBodyShapeModel >( spice_interface::getAverageRadius( "Earth" ) ) );
+    if( useOblateEarthShape )
+    {
+        bodies.at( "Earth" )->setShapeModel(
+                std::make_shared< basic_astrodynamics::OblateSpheroidBodyShapeModel >( 6378137.0, 1.0 / 298.257223563 ) );
+    }
+    else
+    {
+        bodies.at( "Earth" )->setShapeModel(
+                std::make_shared< basic_astrodynamics::SphericalBodyShapeModel >( spice_interface::getAverageRadius( "Earth" ) ) );
+    }
     bodies.at( "Mars" )->setShapeModel(
             std::make_shared< basic_astrodynamics::SphericalBodyShapeModel >( spice_interface::getAverageRadius( "Mars" ) ) );
 
@@ -443,6 +452,8 @@ std::vector< std::vector< double > > getAnalyticalPartialEvaluationTimes(
                     {
                         currentPartialTimes.push_back( linkEndTimes.at( currentPartialTimeIndices.at( j ) ) );
                     }
+                    // No duplication needed for DFOA: its transmitter already returns two indices {0, 2}
+                    // from getLinkEndIndicesForLinkEndTypeAtObservable, matching its 4-element layout.
                 }
             }
         }
@@ -490,7 +501,7 @@ std::vector< std::vector< double > > getAnalyticalPartialEvaluationTimes(
     {
         checkStationId = 0;
         LinkEndId currentAssociatedLinkEndid = estimatedParameters->getEstimatedDoubleParameters( ).at( i )->getParameterName( ).second;
-        if( currentAssociatedLinkEndid.stationName_ != "" )
+        if( currentAssociatedLinkEndid.getReferencePointName( ) != "" )
         {
             checkStationId = 1;
         }
@@ -504,7 +515,7 @@ std::vector< std::vector< double > > getAnalyticalPartialEvaluationTimes(
                 addContribution = 0;
                 if( checkStationId )
                 {
-                    if( linkEndIterator->second.stationName_ == currentAssociatedLinkEndid.stationName_ )
+                    if( linkEndIterator->second.getReferencePointName( ) == currentAssociatedLinkEndid.getReferencePointName( ) )
                     {
                         currentPartialTimeIndices =
                                 getLinkEndIndicesForLinkEndTypeAtObservable( observableType, linkEndIterator->first, linkEnds.size( ) );
@@ -541,7 +552,7 @@ std::vector< std::vector< double > > getAnalyticalPartialEvaluationTimes(
     {
         checkStationId = 0;
         LinkEndId currentAssociatedLinkEndid = estimatedParameters->getEstimatedVectorParameters( ).at( i )->getParameterName( ).second;
-        if( currentAssociatedLinkEndid.stationName_ != "" )
+        if( currentAssociatedLinkEndid.getReferencePointName( ) != "" )
         {
             checkStationId = 1;
         }
@@ -555,7 +566,7 @@ std::vector< std::vector< double > > getAnalyticalPartialEvaluationTimes(
                 addContribution = 0;
                 if( checkStationId )
                 {
-                    if( linkEndIterator->second.stationName_ == currentAssociatedLinkEndid.stationName_ )
+                    if( linkEndIterator->second.getReferencePointName( ) == currentAssociatedLinkEndid.getReferencePointName( ) )
                     {
                         currentPartialTimeIndices =
                                 getLinkEndIndicesForLinkEndTypeAtObservable( observableType, linkEndIterator->first, linkEnds.size( ) );
