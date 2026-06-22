@@ -489,36 +489,33 @@ private:
 
         std::vector< double > observationTimeSteps;
         observationTimeSteps.reserve( observationTimesUtc_.size( ) - 1 );
-        double firstObservationTimeStep = std::numeric_limits< double >::infinity( );
-        double minimumObservationTimeStep = std::numeric_limits< double >::infinity( );
-
         for( unsigned int i = 1; i < observationTimesUtc_.size( ); i++ )
         {
             double testObservationTimeStep = static_cast< double >( observationTimesUtc_.at( i ) - observationTimesUtc_.at( i - 1 ) );
             observationTimeSteps.push_back( testObservationTimeStep );
-            if( std::isfinite( testObservationTimeStep ) && testObservationTimeStep > cadenceTolerance )
+        }
+
+        double observationTimeStep = std::numeric_limits< double >::quiet_NaN( );
+        const auto& metaDataDoubleMap = rawTrackingTxtFileContents_->getMetaDataDoubleMap( );
+        auto integrationTimeIterator = metaDataDoubleMap.find( input_output::TrackingDataType::doppler_integration_time );
+        const bool hasPrecomputedCadence = integrationTimeIterator != metaDataDoubleMap.end( );
+        if( hasPrecomputedCadence )
+        {
+            observationTimeStep = integrationTimeIterator->second;
+            if( !std::isfinite( observationTimeStep ) || observationTimeStep <= cadenceTolerance )
             {
-                if( !std::isfinite( firstObservationTimeStep ) )
-                {
-                    firstObservationTimeStep = testObservationTimeStep;
-                }
-                if( testObservationTimeStep < minimumObservationTimeStep )
-                {
-                    minimumObservationTimeStep = testObservationTimeStep;
-                }
+                throw std::runtime_error(
+                        "Error when getting integration time for processed file contents, invalid precomputed cadence found" );
             }
         }
-
-        if( !std::isfinite( minimumObservationTimeStep ) )
+        else
         {
-            throw std::runtime_error(
-                    "Error when getting integration time for processed file contents, no positive cadence could be inferred" );
-        }
-
-        double observationTimeStep = firstObservationTimeStep;
-        if( firstObservationTimeStep > minimumObservationTimeStep + cadenceTolerance )
-        {
-            observationTimeStep = minimumObservationTimeStep;
+            observationTimeStep = observationTimeSteps.front( );
+            if( !std::isfinite( observationTimeStep ) || observationTimeStep <= cadenceTolerance )
+            {
+                throw std::runtime_error(
+                        "Error when getting integration time for processed file contents, non-positive or too-small time step found" );
+            }
         }
 
         std::vector< CadenceGap > cadenceGaps;
@@ -532,15 +529,19 @@ private:
             }
             else if( std::fabs( observationTimeStep - testObservationTimeStep ) > cadenceTolerance )
             {
-                if( testObservationTimeStep > observationTimeStep + cadenceTolerance )
+                if( hasPrecomputedCadence && testObservationTimeStep > observationTimeStep + cadenceTolerance )
                 {
                     cadenceGaps.push_back(
                             CadenceGap{ i, observationTimesUtc_.at( i - 1 ), observationTimesUtc_.at( i ), testObservationTimeStep } );
                 }
-                else
+                else if( hasPrecomputedCadence )
                 {
                     throw std::runtime_error(
                             "Error when getting integration time for processed file contents, step is smaller than inferred cadence" );
+                }
+                else
+                {
+                    throw std::runtime_error( "Error when getting integration time for processed file contents, step is not equal" );
                 }
             }
         }
@@ -553,14 +554,13 @@ private:
 
             const unsigned int maximumNumberOfGapsToPrint = 5;
             std::ostringstream warningMessage;
-            warningMessage << std::setprecision( 19 )
-                           << "Warning when getting integration time for processed tracking file '" << fileName << "': found "
-                           << cadenceGaps.size( ) << " cadence gap(s), nominal cadence " << observationTimeStep << " s.";
+            warningMessage << std::setprecision( 19 ) << "Warning when getting integration time for processed tracking file '" << fileName
+                           << "': found " << cadenceGaps.size( ) << " cadence gap(s), nominal cadence " << observationTimeStep << " s.";
             for( unsigned int i = 0; i < std::min( maximumNumberOfGapsToPrint, static_cast< unsigned int >( cadenceGaps.size( ) ) ); i++ )
             {
-                warningMessage << "\n  gap " << i + 1 << ": index " << cadenceGaps.at( i ).index
-                               << ", previous UTC " << cadenceGaps.at( i ).previousTime << ", next UTC " << cadenceGaps.at( i ).nextTime
-                               << ", observed delta " << cadenceGaps.at( i ).observedDelta << " s";
+                warningMessage << "\n  gap " << i + 1 << ": index " << cadenceGaps.at( i ).index << ", previous UTC "
+                               << cadenceGaps.at( i ).previousTime << ", next UTC " << cadenceGaps.at( i ).nextTime << ", observed delta "
+                               << cadenceGaps.at( i ).observedDelta << " s";
             }
             if( cadenceGaps.size( ) > maximumNumberOfGapsToPrint )
             {

@@ -25,7 +25,7 @@ namespace simulation_setup
 {
 
 //! User-facing soft-continuity constraint between consecutive multi-arc translational arcs of a single body.
-//! The cost added to the LSQ target is, per pair (Cicalò et al. 2021 Eq. 28):
+//! The cost added to the LSQ target is, per pair (Lari et al. 2021 Eq. 28):
 //!   q_pair = (1 / (mu * m_d)) * d^T C d
 //! where d = x_right(t_c) - x_left(t_c). The weight matrix C selects which components are constrained
 //! (e.g. position-only, velocity-only, full state) and how tightly. Larger mu weakens the penalty.
@@ -33,16 +33,31 @@ class InterArcStateContinuityConstraintSettings
 {
 public:
     InterArcStateContinuityConstraintSettings( std::string body,
-                                                std::vector< double > connectionEpochs,
-                                                std::vector< Eigen::Matrix< double, 6, 6 > > weightMatrices,
-                                                std::vector< double > muValues,
-                                                std::vector< std::pair< int, int > > arcPairs = {} );
+                                               std::vector< double > connectionEpochs,
+                                               std::vector< Eigen::Matrix< double, 6, 6 > > weightMatrices,
+                                               std::vector< double > muValues,
+                                               std::vector< std::pair< int, int > > arcPairs = {} );
 
-    const std::string& body( ) const { return body_; }
-    const std::vector< double >& connectionEpochs( ) const { return connectionEpochs_; }
-    const std::vector< Eigen::Matrix< double, 6, 6 > >& weightMatrices( ) const { return weightMatrices_; }
-    const std::vector< double >& muValues( ) const { return muValues_; }
-    const std::vector< std::pair< int, int > >& arcPairs( ) const { return arcPairs_; }
+    const std::string& body( ) const
+    {
+        return body_;
+    }
+    const std::vector< double >& connectionEpochs( ) const
+    {
+        return connectionEpochs_;
+    }
+    const std::vector< Eigen::Matrix< double, 6, 6 > >& weightMatrices( ) const
+    {
+        return weightMatrices_;
+    }
+    const std::vector< double >& muValues( ) const
+    {
+        return muValues_;
+    }
+    const std::vector< std::pair< int, int > >& arcPairs( ) const
+    {
+        return arcPairs_;
+    }
 
     //! Resolve the weight matrix for the i-th pair (handles 1-or-n broadcasting).
     const Eigen::Matrix< double, 6, 6 >& weightMatrixForPair( std::size_t pairIndex ) const
@@ -57,7 +72,10 @@ public:
     }
 
     //! Number of constrained boundaries (either the explicit arcPairs count or the connection-epoch count).
-    std::size_t numberOfPairs( ) const { return connectionEpochs_.size( ); }
+    std::size_t numberOfPairs( ) const
+    {
+        return connectionEpochs_.size( );
+    }
 
 private:
     void validate( ) const;
