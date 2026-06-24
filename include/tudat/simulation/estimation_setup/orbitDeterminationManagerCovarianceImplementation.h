@@ -15,6 +15,7 @@
 
 #include "tudat/astro/orbit_determination/podInputOutputTypes.h"
 #include "tudat/math/basic/leastSquaresEstimation.h"
+#include "tudat/simulation/estimation_setup/interArcContinuityConstraint.h"
 #include "tudat/simulation/estimation_setup/orbitDeterminationManager.h"
 
 namespace tudat
@@ -86,6 +87,45 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::computeCova
             constraintStateMultiplier,
             constraintRightHandSide,
             estimationInput->getLimitConditionNumberForWarning( ) );
+
+    // Add the inter-arc continuity normal-matrix contribution when the covariance input is an EstimationInput.
+    // Plain CovarianceAnalysisInput intentionally has no inter-arc continuity API.
+    std::vector< std::shared_ptr< InterArcStateContinuityConstraintSettings > > interArcConstraints;
+    auto estimationInputWithInterArcConstraints =
+            std::dynamic_pointer_cast< EstimationInput< ObservationScalarType, TimeType > >( estimationInput );
+    if( estimationInputWithInterArcConstraints != nullptr )
+    {
+        interArcConstraints = estimationInputWithInterArcConstraints->getInterArcContinuityConstraints( );
+    }
+    if( !interArcConstraints.empty( ) )
+    {
+        auto multiArcStmInterface = std::dynamic_pointer_cast<
+                propagators::MultiArcCombinedStateTransitionAndSensitivityMatrixInterface< ObservationScalarType > >(
+                stateTransitionAndSensitivityMatrixInterface_ );
+        if( multiArcStmInterface == nullptr )
+        {
+            throw std::runtime_error(
+                    "Error when applying inter-arc continuity constraints in covariance analysis: STM "
+                    "interface is not multi-arc." );
+        }
+        auto multiArcSimulator = std::dynamic_pointer_cast< propagators::MultiArcDynamicsSimulator< ObservationScalarType, TimeType > >(
+                variationalEquationsSolver_->getDynamicsSimulatorBase( ) );
+        if( multiArcSimulator == nullptr )
+        {
+            throw std::runtime_error(
+                    "Error when applying inter-arc continuity constraints in covariance analysis: "
+                    "dynamics simulator is not multi-arc." );
+        }
+        auto interArcContribution = assembleInterArcContinuityContribution< ObservationScalarType, TimeType >(
+                interArcConstraints,
+                parametersToEstimate_,
+                multiArcSimulator,
+                multiArcStmInterface,
+                normalizationTerms,
+                static_cast< int >( numberEstimatedParameters_ ) );
+        inverseNormalizedCovariance.topLeftCorner( numberEstimatedParameters_, numberEstimatedParameters_ ) +=
+                interArcContribution.additionalNormalMatrix;
+    }
 
     // Compute contribution consider parameters
     Eigen::MatrixXd covarianceContributionConsiderParameters;
