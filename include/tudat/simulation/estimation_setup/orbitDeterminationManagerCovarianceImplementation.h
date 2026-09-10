@@ -17,6 +17,7 @@
 #include "tudat/math/basic/leastSquaresEstimation.h"
 #include "tudat/simulation/estimation_setup/interArcContinuityConstraint.h"
 #include "tudat/simulation/estimation_setup/orbitDeterminationManager.h"
+#include "tudat/simulation/estimation_setup/orbitDeterminationManagerHelpers.h"
 
 namespace tudat
 {
@@ -78,6 +79,7 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::computeCova
     Eigen::MatrixXd constraintStateMultiplier;
     Eigen::VectorXd constraintRightHandSide;
     parametersToEstimate_->getConstraints( constraintStateMultiplier, constraintRightHandSide );
+    normalizeLinearConstraints( constraintStateMultiplier, constraintRightHandSide, normalizationTerms );
 
     // Compute inverse of updated covariance
     Eigen::MatrixXd inverseNormalizedCovariance = linear_algebra::calculateInverseOfUpdatedCovarianceMatrix(
@@ -88,43 +90,25 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::computeCova
             constraintRightHandSide,
             estimationInput->getLimitConditionNumberForWarning( ) );
 
-    // Add the inter-arc continuity normal-matrix contribution when the covariance input is an EstimationInput.
-    // Plain CovarianceAnalysisInput intentionally has no inter-arc continuity API.
-    std::vector< std::shared_ptr< InterArcStateContinuityConstraintSettings > > interArcConstraints;
-    auto estimationInputWithInterArcConstraints =
-            std::dynamic_pointer_cast< EstimationInput< ObservationScalarType, TimeType > >( estimationInput );
-    if( estimationInputWithInterArcConstraints != nullptr )
-    {
-        interArcConstraints = estimationInputWithInterArcConstraints->getInterArcContinuityConstraints( );
-    }
+    const auto& interArcConstraints = estimationInput->getInterArcContinuityConstraints( );
+    InterArcConstraintContribution interArcContribution;
     if( !interArcConstraints.empty( ) )
     {
-        auto multiArcStmInterface = std::dynamic_pointer_cast<
-                propagators::MultiArcCombinedStateTransitionAndSensitivityMatrixInterface< ObservationScalarType > >(
-                stateTransitionAndSensitivityMatrixInterface_ );
-        if( multiArcStmInterface == nullptr )
-        {
-            throw std::runtime_error(
-                    "Error when applying inter-arc continuity constraints in covariance analysis: STM "
-                    "interface is not multi-arc." );
-        }
-        auto multiArcSimulator = std::dynamic_pointer_cast< propagators::MultiArcDynamicsSimulator< ObservationScalarType, TimeType > >(
-                variationalEquationsSolver_->getDynamicsSimulatorBase( ) );
-        if( multiArcSimulator == nullptr )
-        {
-            throw std::runtime_error(
-                    "Error when applying inter-arc continuity constraints in covariance analysis: "
-                    "dynamics simulator is not multi-arc." );
-        }
-        auto interArcContribution = assembleInterArcContinuityContribution< ObservationScalarType, TimeType >(
+        // Add the soft inter-arc continuity-prior normal-matrix contribution.
+        interArcContribution = assembleInterArcContinuityContributionFromManagerInterfaces< ObservationScalarType, TimeType >(
                 interArcConstraints,
                 parametersToEstimate_,
-                multiArcSimulator,
-                multiArcStmInterface,
+                stateTransitionAndSensitivityMatrixInterface_,
+                variationalEquationsSolver_,
                 normalizationTerms,
-                static_cast< int >( numberEstimatedParameters_ ) );
-        inverseNormalizedCovariance.topLeftCorner( numberEstimatedParameters_, numberEstimatedParameters_ ) +=
-                interArcContribution.additionalNormalMatrix;
+                static_cast< int >( numberEstimatedParameters_ ),
+                "covariance analysis",
+                static_cast< int >( designMatrixEstimatedParameters.rows( ) ) );
+        if( interArcContribution.additionalNormalMatrix.size( ) > 0 )
+        {
+            inverseNormalizedCovariance.topLeftCorner( numberEstimatedParameters_, numberEstimatedParameters_ ) +=
+                    interArcContribution.additionalNormalMatrix;
+        }
     }
 
     // Compute contribution consider parameters
@@ -154,7 +138,9 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::computeCova
                     considerNormalizationTerms,
                     covarianceContributionConsiderParameters,
                     estimationInput->getConsiderCovariance( ),
-                    exceptionDuringPropagation );
+                    exceptionDuringPropagation,
+                    interArcContribution.totalConstraintCost,
+                    interArcContribution.perPairDiscrepancies );
 
     return estimationOutput;
 }

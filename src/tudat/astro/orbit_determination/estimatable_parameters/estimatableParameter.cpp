@@ -42,6 +42,9 @@ std::string getParameterTypeString( const EstimatebleParametersEnum parameterTyp
         case radiation_pressure_coefficient:
             parameterDescription = "radiation pressure coefficient ";
             break;
+        case three_coefficient_radiation_pressure_coefficients:
+            parameterDescription = "three-coefficient radiation-pressure areas ";
+            break;
         case arc_wise_radiation_pressure_coefficient:
             parameterDescription = "arc-wise radiation pressure coefficient ";
             break;
@@ -171,14 +174,14 @@ std::string getParameterTypeString( const EstimatebleParametersEnum parameterTyp
         case diffuse_reflectivity:
             parameterDescription = " diffuse reflectivity for panel group ";
             break;
-        case energy_accomodation_coefficient:
-            parameterDescription = " energy accomodation coefficient for panel group ";
+        case energy_accommodation_coefficient:
+            parameterDescription = " energy accommodation coefficient for panel group ";
             break;
-        case normal_accomodation_coefficient:
-            parameterDescription = " normal accomodation coefficient for panel group ";
+        case normal_accommodation_coefficient:
+            parameterDescription = " normal accommodation coefficient for panel group ";
             break;
-        case tangential_accomodation_coefficient:
-            parameterDescription = " tangential accomodation coefficient for panel group ";
+        case tangential_accommodation_coefficient:
+            parameterDescription = " tangential accommodation coefficient for panel group ";
             break;
         case normal_velocity_at_wall_ratio:
             parameterDescription = " normal velocity at wall ratio for panel group ";
@@ -290,6 +293,9 @@ bool isDoubleParameter( const EstimatebleParametersEnum parameterType )
             break;
         case radiation_pressure_coefficient:
             isDoubleParameter = true;
+            break;
+        case three_coefficient_radiation_pressure_coefficients:
+            isDoubleParameter = false;
             break;
         case arc_wise_radiation_pressure_coefficient:
             isDoubleParameter = false;
@@ -423,13 +429,13 @@ bool isDoubleParameter( const EstimatebleParametersEnum parameterType )
         case diffuse_reflectivity:
             isDoubleParameter = true;
             break;
-        case energy_accomodation_coefficient:
+        case energy_accommodation_coefficient:
             isDoubleParameter = true;
             break;
-        case normal_accomodation_coefficient:
+        case normal_accommodation_coefficient:
             isDoubleParameter = true;
             break;
-        case tangential_accomodation_coefficient:
+        case tangential_accommodation_coefficient:
             isDoubleParameter = true;
             break;
         case normal_velocity_at_wall_ratio:
