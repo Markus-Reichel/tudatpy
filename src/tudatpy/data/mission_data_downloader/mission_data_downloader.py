@@ -21,6 +21,7 @@ import shutil
 import time
 
 _REQUEST_TIMEOUT = 30  # seconds
+_ROSETTA_RSI_MAPPING_TIMEOUT = 120  # seconds
 
 
 ### Class for Loading PDS files
@@ -4646,7 +4647,7 @@ class LoadPDS:
         max_retries = 3
         for attempt in range(1, max_retries + 1):
             try:
-                response = requests.get(url, timeout=_REQUEST_TIMEOUT)
+                response = requests.get(url, timeout=_ROSETTA_RSI_MAPPING_TIMEOUT)
                 response.raise_for_status()
                 break
             except requests.exceptions.RequestException as e:
