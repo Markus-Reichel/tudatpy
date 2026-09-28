@@ -48,6 +48,13 @@ namespace tudat
 namespace observation_models
 {
 
+//! Conversion of SPC-style SUM/LMK optical landmark files into Tudat pixel-coordinate observations.
+//!
+//! What each SUM/LMK record means, which readings are documented by SPC/GIANT, which are inferred, and
+//! which are still unknown, is recorded field by field on the structs in tudat/io/readSumLmkFiles.h.
+//! Read that before changing any geometry here: the sign of SCOBJ, the row-versus-column convention of
+//! CX/CY/CZ and of UX/UY/UZ, and the frame SIGMA_LMK is expressed in are all load-bearing, and getting
+//! one wrong produces a plausible-looking few-pixel bias rather than an error.
 class SumLmkObservationConversionSettings
 {
 public:
