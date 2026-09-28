@@ -35,6 +35,13 @@ namespace sum_lmk
 //! rejecting matrices that are materially non-rotational.
 constexpr double sumCameraRotationMatrixTolerance = 1.0E-7;
 
+//! Tolerance for the orthonormality and determinant checks on an LMK UX/UY/UZ landmark frame.
+//!
+//! Deliberately looser than sumCameraRotationMatrixTolerance. The worst orthonormality error across
+//! the archived LMK files is 2.3e-7, so reusing the camera tolerance here would reject the majority
+//! of real landmark files while still admitting nothing that a 1e-6 check would not.
+constexpr double lmkLandmarkFrameTolerance = 1.0E-6;
+
 struct SumLandmarkObservation {
     std::string landmarkId_;
     Eigen::Vector2d pixelCoordinates_ = Eigen::Vector2d::Zero( );

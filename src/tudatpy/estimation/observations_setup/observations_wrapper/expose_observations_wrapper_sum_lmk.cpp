@@ -51,6 +51,22 @@ void expose_observations_wrapper_sum_lmk_bindings( py::module& m )
         ``create_sum_lmk_observation_collection`` to convert without re-reading.
         )doc" )
             .def_readonly( "landmark_id", &tio::LmkLandmarkData::landmarkId_ )
+            .def_readonly( "body_fixed_position",
+                           &tio::LmkLandmarkData::bodyFixedPosition_,
+                           R"doc(Landmark position in the target body-fixed frame, in m (LMK VLM record).)doc" )
+            .def_readonly( "landmark_position_sigma",
+                           &tio::LmkLandmarkData::landmarkPositionSigma_,
+                           R"doc(Per-component 1-sigma uncertainty on the body-fixed position, in m (LMK SIGMA_LMK record).)doc" )
+            .def_readonly( "local_x_axis",
+                           &tio::LmkLandmarkData::localXAxis_,
+                           R"doc(Landmark local frame X axis, as a unit vector in the body-fixed frame (LMK UX record).)doc" )
+            .def_readonly( "local_y_axis",
+                           &tio::LmkLandmarkData::localYAxis_,
+                           R"doc(Landmark local frame Y axis, as a unit vector in the body-fixed frame (LMK UY record).)doc" )
+            .def_readonly(
+                    "local_z_axis",
+                    &tio::LmkLandmarkData::localZAxis_,
+                    R"doc(Landmark local frame Z axis - the maplet plane normal - as a unit vector in the body-fixed frame (LMK UZ record).)doc" )
             .def_readonly( "source_file", &tio::LmkLandmarkData::sourceFile_ );
 
     py::class_< tom::SumLmkObservationConversionSettings >( m, "SumLmkObservationConversionSettings", R"doc(
@@ -84,7 +100,13 @@ void expose_observations_wrapper_sum_lmk_bindings( py::module& m )
                            R"doc(Name of the body carrying the per-image cameras, i.e. the body the pointing parameters belong to.)doc" )
             .def_readonly( "image_id_to_camera_name",
                            &tom::SumLmkObservationConversionResult< STATE_SCALAR_TYPE, TIME_TYPE >::imageIdToCameraName_,
-                           R"doc(Map from SUM image ID to the registered Camera_<imageId> reference-point name.)doc" );
+                           R"doc(Map from SUM image ID to the registered Camera_<imageId> reference-point name.)doc" )
+            .def_readonly( "target_body_name",
+                           &tom::SumLmkObservationConversionResult< STATE_SCALAR_TYPE, TIME_TYPE >::targetBodyName_,
+                           R"doc(Name of the body carrying the landmarks, i.e. the body the landmark position parameters belong to.)doc" )
+            .def_readonly( "landmarks",
+                           &tom::SumLmkObservationConversionResult< STATE_SCALAR_TYPE, TIME_TYPE >::landmarks_,
+                           R"doc(The landmarks actually referenced by the converted images, keyed by landmark ID.)doc" );
 
     m.def( "create_sum_lmk_observation_collection",
            py::overload_cast< const std::vector< std::string >&,
@@ -159,6 +181,41 @@ void expose_observations_wrapper_sum_lmk_bindings( py::module& m )
         SUM/LMK conversion: one 3-vector pointing parameter per image, on the conversion's receiver body. The
         settings are ordered by camera name, so the resulting parameter vector has a reproducible layout. Pass
         ``image_ids`` to restrict the settings to a subset of the images; an unknown image ID raises.
+        )doc" );
+
+    m.def( "create_sum_lmk_landmark_parameter_settings",
+           &tom::createSumLmkLandmarkParameterSettings< STATE_SCALAR_TYPE, TIME_TYPE >,
+           py::arg( "conversion_result" ),
+           py::arg( "observation_collection" ) = std::shared_ptr< tom::ObservationCollection< STATE_SCALAR_TYPE, TIME_TYPE > >( ),
+           py::arg( "landmark_ids" ) = std::vector< std::string >( ),
+           R"doc(
+        Create the ``ground_station_position`` parameter settings for the landmarks of a SUM/LMK conversion:
+        one 3-vector body-fixed position per landmark, on the conversion's target body. Landmarks are
+        registered as body-fixed ground stations by the conversion, so this is an ordinary global (not
+        arc-wise) parameter: a landmark observed from several arcs becomes one shared parameter, tying those
+        arcs together.
+
+        Only landmarks that the estimated observations actually observe get a parameter. By default that is
+        judged from the conversion's own collection; pass ``observation_collection`` to judge it from a
+        filtered collection instead, which is what you want when images or observations were removed before
+        the estimation. The settings are ordered by landmark ID, so the parameter vector has a reproducible
+        layout. Pass ``landmark_ids`` to restrict the settings further; an ID that is unknown, or whose
+        observations have all been filtered away, raises.
+        )doc" );
+
+    m.def( "get_sum_lmk_landmark_local_frame_uncertainties",
+           &tom::getSumLmkLandmarkLocalFrameUncertainties< STATE_SCALAR_TYPE, TIME_TYPE, STATE_SCALAR_TYPE >,
+           py::arg( "conversion_result" ),
+           py::arg( "parameters_to_estimate" ),
+           py::arg( "covariance" ),
+           R"doc(
+        Express the formal uncertainties of the estimated landmark positions in each landmark's own local
+        frame, i.e. along its LMK UX/UY/UZ axes, with UZ the maplet plane normal. Returns a map from landmark
+        ID to a 3-vector of sigmas.
+
+        Landmark positions are estimated in body-fixed coordinates (the frame SIGMA_LMK is also given in), so
+        this is a rotation of the covariance block, ``sqrt(diag(U^T P U))``, rather than a different
+        estimation setup. Landmarks that are not part of the estimated parameter set are omitted.
         )doc" );
 
     m.def( "create_sum_lmk_inverse_apriori_covariance",

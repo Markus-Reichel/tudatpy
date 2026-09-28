@@ -70,6 +70,12 @@ struct SumLmkObservationConversionResult {
     std::map< std::string, std::string > imageIdToCameraName_;
     // Body carrying the per-image cameras, i.e. the body the pointing-correction parameters belong to.
     std::string receiverBodyName_;
+    // Body carrying the landmarks, i.e. the body the landmark position parameters belong to.
+    std::string targetBodyName_;
+    // The landmarks actually referenced by the converted images, keyed by landmark ID. Carries the
+    // UX/UY/UZ local frame and SIGMA_LMK forward, for the landmark a-priori and the local-frame
+    // uncertainty reporting. Landmarks that no converted image observes are not included.
+    std::map< std::string, input_output::sum_lmk::LmkLandmarkData > landmarks_;
     // Observation model settings matching observationCollection_ (one pixel_coordinates setting per
     // (image, landmark) link end), ready for createObservationSimulators / residual computation.
     std::vector< std::shared_ptr< ObservationModelSettings > > observationModelSettings_;
@@ -459,6 +465,74 @@ inline void addPointingAprioriEntryIfAvailable(
                             inverseVariance ) );
 }
 
+//! Build the landmark's local frame as a rotation from the local frame to the target body-fixed frame.
+//!
+//! The SPC convention (see https://web.psi.edu/spc_wiki/MAPFILES) is that UX/UY/UZ are body-fixed unit
+//! vectors - "Ux body fixed unit map axis vector", "Uy body fixed unit map axis vector", "Uz body fixed
+//! unit map normal vector" - so they are the COLUMNS of the local-to-body-fixed rotation, and UZ is the
+//! maplet plane normal. The matrix is projected onto the nearest exact rotation, because LMK files store
+//! the axes at limited precision.
+inline Eigen::Matrix3d getValidatedLandmarkLocalFrame( const input_output::sum_lmk::LmkLandmarkData& landmark )
+{
+    const std::string errorPrefix = "Error when building local frame of landmark '" + landmark.landmarkId_ + "': ";
+    if( !isFiniteVector( landmark.localXAxis_ ) || !isFiniteVector( landmark.localYAxis_ ) || !isFiniteVector( landmark.localZAxis_ ) )
+    {
+        throw std::runtime_error( errorPrefix + "UX/UY/UZ entries must be finite." );
+    }
+
+    Eigen::Matrix3d localFrame;
+    localFrame.col( 0 ) = landmark.localXAxis_;
+    localFrame.col( 1 ) = landmark.localYAxis_;
+    localFrame.col( 2 ) = landmark.localZAxis_;
+
+    const double orthogonalityError = ( localFrame * localFrame.transpose( ) - Eigen::Matrix3d::Identity( ) ).norm( );
+    const double determinantError = std::fabs( localFrame.determinant( ) - 1.0 );
+    if( orthogonalityError > input_output::sum_lmk::lmkLandmarkFrameTolerance ||
+        determinantError > input_output::sum_lmk::lmkLandmarkFrameTolerance )
+    {
+        throw std::runtime_error( errorPrefix + "UX/UY/UZ must form an orthonormal right-handed rotation matrix." );
+    }
+
+    return Eigen::Quaterniond( localFrame ).normalized( ).toRotationMatrix( );
+}
+
+//! Add the SIGMA_LMK inverse-variance entries for one landmark, in the same shape as the SIGMA_PTG
+//! pointing a-priori. SIGMA_LMK is a per-component sigma on the landmark's BODY-FIXED position (see the
+//! GIANT documentation of the SPC landmark record), which is the frame the ground_station_position
+//! parameter is expressed in, so the a-priori is a plain diagonal and needs no rotation.
+inline void addLandmarkAprioriEntryIfAvailable(
+        const input_output::sum_lmk::LmkLandmarkData& landmark,
+        const std::string& targetBodyName,
+        std::vector< std::pair< estimatable_parameters::EstimatebleParameterIdentifier, Eigen::VectorXd > >&
+                inverseAprioriCovarianceDiagonalEntries )
+{
+    if( !landmark.landmarkPositionSigma_.array( ).isFinite( ).any( ) )
+    {
+        return;
+    }
+    if( !landmark.landmarkPositionSigma_.array( ).isFinite( ).all( ) )
+    {
+        throw std::runtime_error( "Error when converting LMK landmark '" + landmark.landmarkId_ +
+                                  "': SIGMA_LMK must provide either all three components or no components." );
+    }
+
+    Eigen::VectorXd inverseVariance = Eigen::VectorXd::Zero( 3 );
+    for( int i = 0; i < 3; ++i )
+    {
+        if( landmark.landmarkPositionSigma_( i ) <= 0.0 )
+        {
+            throw std::runtime_error( "Error when converting LMK landmark '" + landmark.landmarkId_ +
+                                      "': SIGMA_LMK entries must be positive." );
+        }
+        inverseVariance( i ) = 1.0 / ( landmark.landmarkPositionSigma_( i ) * landmark.landmarkPositionSigma_( i ) );
+    }
+
+    inverseAprioriCovarianceDiagonalEntries.push_back( std::make_pair(
+            estimatable_parameters::EstimatebleParameterIdentifier( estimatable_parameters::ground_station_position,
+                                                                    std::make_pair( targetBodyName, landmark.landmarkId_ ) ),
+            inverseVariance ) );
+}
+
 }  // namespace detail
 
 template< typename ObservationScalarType = double, typename TimeType = double >
@@ -558,7 +632,22 @@ SumLmkObservationConversionResult< ObservationScalarType, TimeType > createSumLm
 
     SumLmkObservationConversionResult< ObservationScalarType, TimeType > result;
     result.receiverBodyName_ = conversionSettings.receiverBodyName_;
+    result.targetBodyName_ = conversionSettings.targetBodyName_;
     detail::validateSanitizedCameraNames( sumImagesToConvert, result.imageIdToCameraName_ );
+
+    // Keep only the landmarks that a converted image actually observes: landmarks belonging to images
+    // that were filtered out must not reach the landmark parameter or a-priori helpers.
+    for( const input_output::sum_lmk::SumImageData& image : sumImagesToConvert )
+    {
+        for( const input_output::sum_lmk::SumLandmarkObservation& observation : image.landmarkObservations_ )
+        {
+            const auto landmarkIterator = landmarks.find( observation.landmarkId_ );
+            if( landmarkIterator != landmarks.end( ) )
+            {
+                result.landmarks_[ observation.landmarkId_ ] = landmarkIterator->second;
+            }
+        }
+    }
 
     std::shared_ptr< simulation_setup::Body > targetBody = bodies.at( conversionSettings.targetBodyName_ );
     std::shared_ptr< simulation_setup::Body > receiverBody = bodies.at( conversionSettings.receiverBodyName_ );
@@ -577,6 +666,12 @@ SumLmkObservationConversionResult< ObservationScalarType, TimeType > createSumLm
                                                     conversionSettings.receiverBodyName_,
                                                     result.imageIdToCameraName_.at( image.imageId_ ),
                                                     result.inverseAprioriCovarianceDiagonalEntries_ );
+    }
+
+    for( const auto& landmarkEntry : result.landmarks_ )
+    {
+        detail::addLandmarkAprioriEntryIfAvailable(
+                landmarkEntry.second, conversionSettings.targetBodyName_, result.inverseAprioriCovarianceDiagonalEntries_ );
     }
 
     result.observationModelSettings_ =
@@ -639,6 +734,187 @@ std::vector< std::shared_ptr< estimatable_parameters::EstimatableParameterSettin
         parameterSettings.push_back( estimatable_parameters::cameraPointingCorrection( conversionResult.receiverBodyName_, cameraName ) );
     }
     return parameterSettings;
+}
+
+namespace detail
+{
+
+//! Collect the IDs of the landmarks that an observation collection actually observes, i.e. the landmarks
+//! that a solution using that collection can estimate.
+//!
+//! The set is taken from the collection rather than from the parsed LMK input on purpose: images, and
+//! therefore landmarks, are dropped before the estimation starts - by skipObservationsWithMissingLandmarks_
+//! at conversion time, by ObservationCollection::filterObservations afterwards, or by the caller passing a
+//! subset. Observations are counted rather than link ends merely listed, because filtering can leave an
+//! emptied observation set in place for a link end that no longer contributes anything.
+template< typename ObservationScalarType, typename TimeType >
+std::set< std::string > getObservedLandmarkIds(
+        const std::shared_ptr< ObservationCollection< ObservationScalarType, TimeType > >& observationCollection,
+        const std::string& targetBodyName )
+{
+    std::set< std::string > observedLandmarkIds;
+    const auto& observationSets = observationCollection->getObservationsReference( );
+    if( observationSets.count( pixel_coordinates ) == 0 )
+    {
+        return observedLandmarkIds;
+    }
+
+    for( const auto& linkEndsEntry : observationSets.at( pixel_coordinates ) )
+    {
+        const LinkEnds& currentLinkEnds = linkEndsEntry.first;
+        if( currentLinkEnds.count( transmitter ) == 0 )
+        {
+            continue;
+        }
+        const LinkEndId& transmitterLinkEnd = currentLinkEnds.at( transmitter );
+        if( transmitterLinkEnd.bodyName_ != targetBodyName || transmitterLinkEnd.getReferencePointName( ).empty( ) )
+        {
+            continue;
+        }
+
+        unsigned int numberOfObservations = 0;
+        for( const auto& observationSet : linkEndsEntry.second )
+        {
+            if( observationSet != nullptr )
+            {
+                numberOfObservations += observationSet->getTotalObservationSetSize( );
+            }
+        }
+        if( numberOfObservations > 0 )
+        {
+            observedLandmarkIds.insert( transmitterLinkEnd.getReferencePointName( ) );
+        }
+    }
+    return observedLandmarkIds;
+}
+
+}  // namespace detail
+
+//! Build the ground_station_position parameter settings for the landmarks of a SUM/LMK conversion: one
+//! 3-vector body-fixed position per landmark, on the target body the landmarks are registered to. Since
+//! this is an ordinary (non-arc-wise) parameter, each landmark becomes a single global parameter shared by
+//! every arc that observes it - which is the point, for a body seen repeatedly from different arcs.
+//!
+//! Only landmarks that the estimated observations actually observe get a parameter. By default that is
+//! judged from the conversion's own collection; pass observationCollection explicitly to judge it from a
+//! filtered collection instead. The settings are ordered by landmark ID, so the resulting parameter vector
+//! has a reproducible layout. Pass landmarkIds to restrict the settings further; an ID that is unknown, or
+//! whose observations have all been filtered away, raises rather than being silently dropped.
+template< typename ObservationScalarType = double, typename TimeType = double >
+std::vector< std::shared_ptr< estimatable_parameters::EstimatableParameterSettings > > createSumLmkLandmarkParameterSettings(
+        const SumLmkObservationConversionResult< ObservationScalarType, TimeType >& conversionResult,
+        const std::shared_ptr< ObservationCollection< ObservationScalarType, TimeType > >& observationCollection = nullptr,
+        const std::vector< std::string >& landmarkIds = std::vector< std::string >( ) )
+{
+    if( conversionResult.targetBodyName_.empty( ) )
+    {
+        throw std::runtime_error( "Error when creating SUM/LMK landmark parameter settings: conversion result has no target body name." );
+    }
+
+    const std::shared_ptr< ObservationCollection< ObservationScalarType, TimeType > > collectionToUse =
+            ( observationCollection != nullptr ) ? observationCollection : conversionResult.observationCollection_;
+    if( collectionToUse == nullptr )
+    {
+        throw std::runtime_error( "Error when creating SUM/LMK landmark parameter settings: observation collection is null." );
+    }
+
+    const std::set< std::string > observedLandmarkIds =
+            detail::getObservedLandmarkIds< ObservationScalarType, TimeType >( collectionToUse, conversionResult.targetBodyName_ );
+
+    std::set< std::string > landmarkIdsToEstimate;
+    if( landmarkIds.empty( ) )
+    {
+        landmarkIdsToEstimate = observedLandmarkIds;
+    }
+    else
+    {
+        for( const std::string& landmarkId : landmarkIds )
+        {
+            if( observedLandmarkIds.count( landmarkId ) == 0 )
+            {
+                const bool isKnownLandmark = conversionResult.landmarks_.count( landmarkId ) != 0;
+                throw std::runtime_error( "Error when creating SUM/LMK landmark parameter settings: landmark '" + landmarkId +
+                                          ( isKnownLandmark ? "' has no observations left in the given observation collection."
+                                                            : "' is not part of the converted observations." ) );
+            }
+            landmarkIdsToEstimate.insert( landmarkId );
+        }
+    }
+
+    std::vector< std::shared_ptr< estimatable_parameters::EstimatableParameterSettings > > parameterSettings;
+    for( const std::string& landmarkId : landmarkIdsToEstimate )
+    {
+        parameterSettings.push_back( estimatable_parameters::groundStationPosition( conversionResult.targetBodyName_, landmarkId ) );
+    }
+    return parameterSettings;
+}
+
+//! Express the formal uncertainties of the estimated landmark positions in each landmark's own local
+//! frame, i.e. along its LMK UX/UY/UZ axes, with UZ the maplet plane normal.
+//!
+//! The landmark positions are estimated in body-fixed coordinates, which is also the frame SIGMA_LMK is
+//! given in, so no local-frame parameterisation is needed to get this - rotating the covariance block
+//! afterwards is equivalent: sigma_local = sqrt( diag( U^T P U ) ). Landmarks that are not part of the
+//! estimated parameter set are omitted from the result rather than reported as zero.
+template< typename ObservationScalarType = double, typename TimeType = double, typename InitialStateParameterType = double >
+std::map< std::string, Eigen::Vector3d > getSumLmkLandmarkLocalFrameUncertainties(
+        const SumLmkObservationConversionResult< ObservationScalarType, TimeType >& conversionResult,
+        const std::shared_ptr< estimatable_parameters::EstimatableParameterSet< InitialStateParameterType > >& parametersToEstimate,
+        const Eigen::MatrixXd& covariance )
+{
+    if( parametersToEstimate == nullptr )
+    {
+        throw std::runtime_error( "Error when computing landmark local-frame uncertainties: parameter set is null." );
+    }
+    const int numberOfParameters = parametersToEstimate->getEstimatedParameterSetSize( );
+    if( covariance.rows( ) != numberOfParameters || covariance.cols( ) != numberOfParameters )
+    {
+        throw std::runtime_error( "Error when computing landmark local-frame uncertainties: covariance is " +
+                                  std::to_string( covariance.rows( ) ) + "x" + std::to_string( covariance.cols( ) ) +
+                                  ", but the estimated parameter set has size " + std::to_string( numberOfParameters ) + "." );
+    }
+
+    std::map< std::string, Eigen::Vector3d > localFrameUncertainties;
+    for( const auto& landmarkEntry : conversionResult.landmarks_ )
+    {
+        const estimatable_parameters::EstimatebleParameterIdentifier parameterIdentifier(
+                estimatable_parameters::ground_station_position, std::make_pair( conversionResult.targetBodyName_, landmarkEntry.first ) );
+        const std::vector< std::pair< int, int > > parameterIndices =
+                parametersToEstimate->getIndicesForParameterType( parameterIdentifier );
+        if( parameterIndices.empty( ) )
+        {
+            // Landmark is not estimated; it simply has no formal uncertainty to report.
+            continue;
+        }
+        if( parameterIndices.size( ) > 1 )
+        {
+            throw std::runtime_error( "Error when computing landmark local-frame uncertainties: landmark '" + landmarkEntry.first +
+                                      "' matches more than one parameter block." );
+        }
+        if( parameterIndices.at( 0 ).second != 3 )
+        {
+            throw std::runtime_error( "Error when computing landmark local-frame uncertainties: landmark '" + landmarkEntry.first +
+                                      "' has parameter size " + std::to_string( parameterIndices.at( 0 ).second ) + " instead of 3." );
+        }
+
+        const Eigen::Matrix3d localFrame = detail::getValidatedLandmarkLocalFrame( landmarkEntry.second );
+        const int startIndex = parameterIndices.at( 0 ).first;
+        const Eigen::Matrix3d localFrameCovariance =
+                localFrame.transpose( ) * covariance.block( startIndex, startIndex, 3, 3 ) * localFrame;
+
+        Eigen::Vector3d uncertainties = Eigen::Vector3d::Zero( );
+        for( int i = 0; i < 3; ++i )
+        {
+            if( localFrameCovariance( i, i ) < 0.0 )
+            {
+                throw std::runtime_error( "Error when computing landmark local-frame uncertainties: landmark '" + landmarkEntry.first +
+                                          "' has a negative variance on the local frame diagonal." );
+            }
+            uncertainties( i ) = std::sqrt( localFrameCovariance( i, i ) );
+        }
+        localFrameUncertainties[ landmarkEntry.first ] = uncertainties;
+    }
+    return localFrameUncertainties;
 }
 
 //! Assemble an inverse a-priori covariance matrix for an EstimationInput from per-parameter inverse-variance

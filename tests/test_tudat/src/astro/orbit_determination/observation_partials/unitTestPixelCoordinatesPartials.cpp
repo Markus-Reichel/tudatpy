@@ -28,6 +28,7 @@
 #include "tudat/simulation/estimation_setup/createObservationModelFactory.h"
 #include "tudat/astro/observation_models/oneWayRangeObservationModel.h"
 #include "tudat/astro/orbit_determination/estimatable_parameters/cameraPointingCorrection.h"
+#include "tudat/astro/orbit_determination/estimatable_parameters/groundStationPosition.h"
 #include "tudat/astro/orbit_determination/estimatable_parameters/constantRotationRate.h"
 #include "tudat/astro/orbit_determination/estimatable_parameters/initialTranslationalState.h"
 #include "tudat/simulation/estimation_setup/createObservationPartials.h"
@@ -232,9 +233,32 @@ BOOST_AUTO_TEST_CASE( testSumLmkConversionAndCameraPointingPartials )
     BOOST_CHECK( bodies.at( "Spacecraft" )->getVehicleSystems( )->getCameraMap( ).count( cameraName ) == 1 );
     BOOST_CHECK( bodies.at( "Target" )->getGroundStationMap( ).count( "LMK0001" ) == 1 );
     BOOST_CHECK( bodies.at( "Target" )->getGroundStationMap( ).count( "LMK0002" ) == 1 );
-    BOOST_REQUIRE_EQUAL( conversionResult.inverseAprioriCovarianceDiagonalEntries_.size( ), 1 );
-    BOOST_CHECK_EQUAL( conversionResult.inverseAprioriCovarianceDiagonalEntries_.at( 0 ).first.first, camera_pointing_correction );
-    BOOST_CHECK_SMALL( conversionResult.inverseAprioriCovarianceDiagonalEntries_.at( 0 ).second( 0 ) - 1.0E8, 1.0E-6 );
+    // One SIGMA_PTG entry for the image, plus one SIGMA_LMK entry per landmark: both committed LMK files
+    // carry a SIGMA_LMK record of 1e-3 km, i.e. 1 m per axis.
+    BOOST_REQUIRE_EQUAL( conversionResult.inverseAprioriCovarianceDiagonalEntries_.size( ), 3 );
+    std::size_t numberOfPointingEntries = 0;
+    std::size_t numberOfLandmarkEntries = 0;
+    for( const auto& aprioriEntry : conversionResult.inverseAprioriCovarianceDiagonalEntries_ )
+    {
+        if( aprioriEntry.first.first == camera_pointing_correction )
+        {
+            ++numberOfPointingEntries;
+            BOOST_CHECK_EQUAL( aprioriEntry.first.second.second, cameraName );
+            BOOST_CHECK_SMALL( aprioriEntry.second( 0 ) - 1.0E8, 1.0E-6 );
+        }
+        else if( aprioriEntry.first.first == ground_station_position )
+        {
+            ++numberOfLandmarkEntries;
+            BOOST_CHECK_EQUAL( aprioriEntry.first.second.first, "Target" );
+            BOOST_REQUIRE_EQUAL( aprioriEntry.second.size( ), 3 );
+            for( int component = 0; component < 3; ++component )
+            {
+                BOOST_CHECK_CLOSE( aprioriEntry.second( component ), 1.0, 1.0E-6 );
+            }
+        }
+    }
+    BOOST_CHECK_EQUAL( numberOfPointingEntries, 1 );
+    BOOST_CHECK_EQUAL( numberOfLandmarkEntries, 2 );
 
     LinkEnds linkEndsLmk1;
     linkEndsLmk1[ transmitter ] = LinkEndId( "Target", "LMK0001" );
@@ -814,6 +838,149 @@ BOOST_AUTO_TEST_CASE( testPointingCorrectionAppliedForBodyFixedCamera )
     const std::vector< std::shared_ptr< EstimatableParameterSettings > > parameterSettingsWithoutSystems = { cameraPointingCorrection(
             "NoSystemsBody", cameraName ) };
     BOOST_CHECK_THROW( createParametersToEstimate( parameterSettingsWithoutSystems, bodies ), std::runtime_error );
+}
+
+//! The landmark position parameter (ground_station_position on the target body) has never been
+//! exercised for pixel observations: its partial comes from the generic vector-parameter route in
+//! createSingleLinkObservationPartials and the ground_station_position case in
+//! createCartesianStatePartialsWrtParameter, with no pixel-specific code involved. This checks that
+//! the route is reached, that the partial matches the observable's actual sensitivity, that it is
+//! attached only to the landmark it belongs to, and that resetting a landmark position works on a
+//! target body that has no shape model (the one step that is not obvious from the call graph).
+BOOST_AUTO_TEST_CASE( testLandmarkPositionPartial )
+{
+    spice_interface::loadStandardSpiceKernels( );
+
+    SystemOfBodies bodies = createSyntheticSumLmkBodies( );
+
+    // Non-identity target orientation, so that a partial which forgot to rotate from the body-fixed to
+    // the inertial frame would be caught rather than hidden by an identity rotation matrix.
+    const Eigen::Quaterniond targetOrientation(
+            Eigen::AngleAxisd( 0.7, ( Eigen::Vector3d( ) << 0.3, -0.5, 0.81 ).finished( ).normalized( ) ) );
+    bodies.at( "Target" )
+            ->setRotationalEphemeris( std::make_shared< ConstantRotationalEphemeris >( targetOrientation, "J2000", "Target_Fixed" ) );
+
+    // Landmarks off the camera boresight, so that every body-fixed component moves the pixel.
+    const Eigen::Vector3d nominalLandmarkPosition = ( Eigen::Vector3d( ) << 400.0, -250.0, 100.0 ).finished( );
+    createGroundStation( bodies.at( "Target" ),
+                         "LMK0001",
+                         nominalLandmarkPosition,
+                         coordinate_conversions::cartesian_position,
+                         std::vector< std::shared_ptr< GroundStationMotionSettings > >( ) );
+    createGroundStation( bodies.at( "Target" ),
+                         "LMK0002",
+                         ( Eigen::Vector3d( ) << -300.0, 150.0, -50.0 ).finished( ),
+                         coordinate_conversions::cartesian_position,
+                         std::vector< std::shared_ptr< GroundStationMotionSettings > >( ) );
+
+    const std::string cameraName = "Camera_BodyFixed";
+    createCamera( bodies.at( "Spacecraft" ),
+                  cameraName,
+                  ( Eigen::Vector3d( ) << -mathematical_constants::PI / 2.0, mathematical_constants::PI / 2.0, 0.0 ).finished( ),
+                  std::make_pair( 1200.0, 900.0 ),
+                  std::make_pair( 320.0, 240.0 ),
+                  Eigen::Vector3d::Zero( ) );
+
+    LinkEnds linkEnds;
+    linkEnds[ transmitter ] = LinkEndId( "Target", "LMK0001" );
+    linkEnds[ receiver ] = LinkEndId( "Spacecraft", cameraName );
+    std::shared_ptr< ObservationModel< 2, double, double > > pixelCoordinatesModel =
+            ObservationModelCreator< 2, double, double >::createObservationModel( pixelCoordinatesSettings( LinkDefinition( linkEnds ) ),
+                                                                                  bodies );
+
+    std::shared_ptr< GroundStationPosition > landmarkParameter = std::make_shared< GroundStationPosition >(
+            bodies.at( "Target" )->getGroundStation( "LMK0001" )->getNominalStationState( ), "Target", "LMK0001" );
+
+    // Resetting the position must work on a body without a shape model: the reset recomputes a
+    // topocentric frame, which is the only part of the round trip not visible from the call graph.
+    BOOST_CHECK_NO_THROW( landmarkParameter->setParameterValue( nominalLandmarkPosition ) );
+    TUDAT_CHECK_MATRIX_CLOSE_FRACTION( Eigen::Vector3d( landmarkParameter->getParameterValue( ) ), nominalLandmarkPosition, 1.0E-14 );
+    BOOST_CHECK_EQUAL( landmarkParameter->getParameterSize( ), 3 );
+
+    std::shared_ptr< EstimatableParameterSet< double > > parameterSet = std::make_shared< EstimatableParameterSet< double > >(
+            std::vector< std::shared_ptr< EstimatableParameter< double > > >( ),
+            std::vector< std::shared_ptr< EstimatableParameter< Eigen::VectorXd > > >( { landmarkParameter } ) );
+
+    auto partialsAndScaling =
+            ObservationPartialCreator< 2, double, double >::createObservationPartials( pixelCoordinatesModel, bodies, parameterSet );
+    BOOST_REQUIRE_EQUAL( partialsAndScaling.first.size( ), 1 );
+    std::shared_ptr< ObservationPartial< 2 > > landmarkPartial = partialsAndScaling.first.begin( )->second;
+
+    const double observationTime = 0.0;
+    auto computePixelObservation = [ & ]( const Eigen::Vector3d& landmarkPosition ) {
+        landmarkParameter->setParameterValue( landmarkPosition );
+        std::vector< Eigen::Vector6d > currentStates;
+        std::vector< double > currentTimes;
+        return Eigen::Vector2d( pixelCoordinatesModel->computeObservationsWithLinkEndData(
+                observationTime, receiver, currentTimes, currentStates, nullptr ) );
+    };
+
+    auto computeAnalyticalPartial = [ & ]( const Eigen::Vector3d& landmarkPosition ) {
+        landmarkParameter->setParameterValue( landmarkPosition );
+        std::vector< Eigen::Vector6d > currentStates;
+        std::vector< double > currentTimes;
+        const Eigen::Vector2d currentObservation = pixelCoordinatesModel->computeObservationsWithLinkEndData(
+                observationTime, receiver, currentTimes, currentStates, nullptr );
+        partialsAndScaling.second->update( currentStates, currentTimes, receiver, currentObservation );
+        return Eigen::Matrix< double, 2, 3 >(
+                landmarkPartial->calculatePartial( currentStates, currentTimes, receiver, nullptr, currentObservation ).at( 0 ).first );
+    };
+
+    auto computeNumericalPartial = [ & ]( const Eigen::Vector3d& landmarkPosition ) {
+        const double perturbation = 1.0;
+        Eigen::Matrix< double, 2, 3 > numericalPartial = Eigen::Matrix< double, 2, 3 >::Zero( );
+        for( int i = 0; i < 3; ++i )
+        {
+            Eigen::Vector3d perturbationVector = Eigen::Vector3d::Zero( );
+            perturbationVector( i ) = perturbation;
+            numericalPartial.col( i ) = ( computePixelObservation( landmarkPosition + perturbationVector ) -
+                                          computePixelObservation( landmarkPosition - perturbationVector ) ) /
+                    ( 2.0 * perturbation );
+        }
+        landmarkParameter->setParameterValue( landmarkPosition );
+        return numericalPartial;
+    };
+
+    // The observable must actually respond to a landmark displacement on this path.
+    const Eigen::Vector3d displacedLandmarkPosition = nominalLandmarkPosition + ( Eigen::Vector3d( ) << 25.0, -40.0, 15.0 ).finished( );
+    BOOST_CHECK( ( computePixelObservation( displacedLandmarkPosition ) - computePixelObservation( nominalLandmarkPosition ) ).norm( ) >
+                 1.0E-2 );
+
+    for( const Eigen::Vector3d& evaluationPoint : { nominalLandmarkPosition, displacedLandmarkPosition } )
+    {
+        const Eigen::Matrix< double, 2, 3 > analyticalPartial = computeAnalyticalPartial( evaluationPoint );
+        const Eigen::Matrix< double, 2, 3 > numericalPartial = computeNumericalPartial( evaluationPoint );
+        BOOST_CHECK( analyticalPartial.norm( ) > 1.0E-6 );
+
+        // Compared per column, relative to that column's own magnitude: the component along the line of
+        // sight is orders of magnitude less sensitive than the two transverse ones, so a single absolute
+        // tolerance on the whole matrix would not test it at all.
+        for( int i = 0; i < 3; ++i )
+        {
+            BOOST_CHECK( analyticalPartial.col( i ).norm( ) > 0.0 );
+            BOOST_CHECK_SMALL( ( analyticalPartial.col( i ) - numericalPartial.col( i ) ).norm( ) / analyticalPartial.col( i ).norm( ),
+                               1.0E-6 );
+        }
+    }
+
+    landmarkParameter->setParameterValue( nominalLandmarkPosition );
+
+    // A parameter for a different landmark on the same body must not be attached to this link end.
+    {
+        std::shared_ptr< GroundStationPosition > otherLandmarkParameter = std::make_shared< GroundStationPosition >(
+                bodies.at( "Target" )->getGroundStation( "LMK0002" )->getNominalStationState( ), "Target", "LMK0002" );
+        std::shared_ptr< EstimatableParameterSet< double > > otherParameterSet = std::make_shared< EstimatableParameterSet< double > >(
+                std::vector< std::shared_ptr< EstimatableParameter< double > > >( ),
+                std::vector< std::shared_ptr< EstimatableParameter< Eigen::VectorXd > > >( { otherLandmarkParameter } ) );
+        auto otherPartials = ObservationPartialCreator< 2, double, double >::createObservationPartials(
+                pixelCoordinatesModel, bodies, otherParameterSet );
+        BOOST_CHECK_EQUAL( otherPartials.first.size( ), 0 );
+    }
+
+    // Requesting a landmark that does not exist on the body must fail cleanly.
+    const std::vector< std::shared_ptr< EstimatableParameterSettings > > missingLandmarkSettings = { groundStationPosition(
+            "Target", "LMK_MISSING" ) };
+    BOOST_CHECK_THROW( createParametersToEstimate( missingLandmarkSettings, bodies ), std::runtime_error );
 }
 
 //! The conversion result carries one pixel-coordinate observation model setting per (image, landmark).
