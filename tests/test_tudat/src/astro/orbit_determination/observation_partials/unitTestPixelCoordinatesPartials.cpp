@@ -329,7 +329,7 @@ BOOST_AUTO_TEST_CASE( testSumUtcToTdbMatchesSpice )
     const std::string testDataPath = paths::getTudatTestDataPath( ) + "/sum_lmk";
     const input_output::sum_lmk::SumImageData image = input_output::sum_lmk::readSumFile( testDataPath + "/W48230079013.SUM" );
 
-    const double tdbSecondsSinceJ2000 = observation_models::detail::convertSumUtcStringToSecondsSinceJ2000< double >( image );
+    const double tdbSecondsSinceJ2000 = getSumImageTdbObservationTime< double >( image );
     // str2et interprets the calendar string as UTC and returns ephemeris time (TDB) seconds past J2000.
     const double expected = spice_interface::convertDateStringToEphemerisTime( "2015-04-14T16:26:27.974" );
     BOOST_CHECK_SMALL( tdbSecondsSinceJ2000 - expected, 1.0E-3 );
@@ -339,10 +339,10 @@ BOOST_AUTO_TEST_CASE( testSumUtcToTdbMatchesSpice )
 BOOST_AUTO_TEST_CASE( testSumCameraNameSanitization )
 {
     namespace detail = observation_models::detail;
-    BOOST_CHECK_EQUAL( detail::sanitizeSumImageIdToCameraName( "W48230079013" ), "Camera_W48230079013" );
-    BOOST_CHECK_EQUAL( detail::sanitizeSumImageIdToCameraName( "  N123 " ), "Camera_N123" );
-    BOOST_CHECK_EQUAL( detail::sanitizeSumImageIdToCameraName( "IMG/01:a" ), "Camera_IMG_01_a" );
-    BOOST_CHECK_THROW( detail::sanitizeSumImageIdToCameraName( "   " ), std::runtime_error );
+    BOOST_CHECK_EQUAL( input_output::sum_lmk::getSumImageCameraName( "W48230079013" ), "Camera_W48230079013" );
+    BOOST_CHECK_EQUAL( input_output::sum_lmk::getSumImageCameraName( "  N123 " ), "Camera_N123" );
+    BOOST_CHECK_EQUAL( input_output::sum_lmk::getSumImageCameraName( "IMG/01:a" ), "Camera_IMG_01_a" );
+    BOOST_CHECK_THROW( input_output::sum_lmk::getSumImageCameraName( "   " ), std::runtime_error );
 }
 
 //! SIGMA_PTG -> inverse a-priori covariance: positivity and all-or-nothing validation.
@@ -406,6 +406,43 @@ BOOST_AUTO_TEST_CASE( testSumNonZeroDistortionIsRejected )
 
     BOOST_CHECK( bodies.at( "Target" )->getGroundStationMap( ).empty( ) );
     BOOST_CHECK( bodies.at( "Spacecraft" )->getVehicleSystems( )->getCameraMap( ).empty( ) );
+}
+
+//! Programmatic SUM inputs bypass the file reader, so calibration and attitude must be revalidated
+//! before the converter adds landmarks or cameras to the caller's body system.
+BOOST_AUTO_TEST_CASE( testSumCalibrationAndAttitudeAreValidatedBeforeEnvironmentMutation )
+{
+    spice_interface::loadStandardSpiceKernels( );
+    const SumLmkObservationConversionSettings conversionSettings( "Target", "Spacecraft" );
+    const auto checkRejectedImage = [ &conversionSettings ]( const input_output::sum_lmk::SumImageData& image,
+                                                             const std::string& expectedDiagnostic ) {
+        SystemOfBodies bodies = createSyntheticSumLmkBodies( );
+        bool threw = false;
+        try
+        {
+            createSumLmkObservationCollection< double, double >( { image }, makeSyntheticLandmarks( ), bodies, conversionSettings );
+        }
+        catch( const std::runtime_error& exception )
+        {
+            threw = true;
+            BOOST_CHECK( std::string( exception.what( ) ).find( expectedDiagnostic ) != std::string::npos );
+        }
+        BOOST_CHECK( threw );
+        BOOST_CHECK( bodies.at( "Target" )->getGroundStationMap( ).empty( ) );
+        BOOST_CHECK( bodies.at( "Spacecraft" )->getVehicleSystems( )->getCameraMap( ).empty( ) );
+    };
+
+    input_output::sum_lmk::SumImageData invalidFocalLength = makeSyntheticSumImage( "IMGBADFOCAL", Eigen::Vector3d::Constant( 1.0E-4 ) );
+    invalidFocalLength.focalLengthMm_ = 0.0;
+    checkRejectedImage( invalidFocalLength, "MMFL" );
+
+    input_output::sum_lmk::SumImageData singularKMatrix = makeSyntheticSumImage( "IMGBADKMAT", Eigen::Vector3d::Constant( 1.0E-4 ) );
+    singularKMatrix.kMatrix_.row( 1 ) = 2.0 * singularKMatrix.kMatrix_.row( 0 );
+    checkRejectedImage( singularKMatrix, "K-MATRIX" );
+
+    input_output::sum_lmk::SumImageData nonOrthonormalAttitude = makeSyntheticSumImage( "IMGBADATT", Eigen::Vector3d::Constant( 1.0E-4 ) );
+    nonOrthonormalAttitude.cameraAxes_( 0, 0 ) = 2.0;
+    checkRejectedImage( nonOrthonormalAttitude, "CX/CY/CZ" );
 }
 
 //! Missing LMK definitions must be reported in one aggregated diagnostic.
@@ -519,7 +556,7 @@ BOOST_AUTO_TEST_CASE( testSumLmkTimeBoundsFilteringWorkflow )
     BOOST_REQUIRE_EQUAL( conversionResult.observationCollection_->getConcatenatedTimeVector( ).size( ), 4 );
     BOOST_REQUIRE_EQUAL( conversionResult.observationModelSettings_.size( ), 2 );
 
-    const double inWindowTime = observation_models::detail::convertSumUtcStringToSecondsSinceJ2000< double >( inWindowImage );
+    const double inWindowTime = getSumImageTdbObservationTime< double >( inWindowImage );
     const std::shared_ptr< ObservationFilterBase > timeBoundsFilter =
             observationFilter( time_bounds_filtering, inWindowTime - 1.0, inWindowTime + 1.0, true, true );
     conversionResult.observationCollection_->filterObservations( timeBoundsFilter );
@@ -603,6 +640,14 @@ BOOST_AUTO_TEST_CASE( testRealSumLmkReprojection )
         BOOST_CHECK_MESSAGE( ( modelled - observation.pixelCoordinates_ ).norm( ) < 3.0,
                              "Reprojection residual too large for landmark " + observation.landmarkId_ );
     }
+}
+
+//! A null pointing parameter must produce a controlled exception before its name is accessed.
+BOOST_AUTO_TEST_CASE( testCameraPointingPartialRejectsNullParameter )
+{
+    const std::shared_ptr< PixelCoordinatesScaling > scaling;
+    const std::shared_ptr< EstimatableParameter< Eigen::VectorXd > > parameter;
+    BOOST_CHECK_THROW( PixelCoordinatesPointingPartial( scaling, parameter ), std::runtime_error );
 }
 
 //! The camera_pointing_correction partial must be created only for the matching receiver camera.

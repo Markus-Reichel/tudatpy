@@ -21,6 +21,11 @@
 
 #include <boost/algorithm/string.hpp>
 
+#include <Eigen/LU>
+
+#include "tudat/astro/basic_astro/dateTime.h"
+#include "tudat/io/readTrackingTxtFile.h"
+
 namespace tudat
 {
 
@@ -230,6 +235,11 @@ bool isFinite( const Eigen::Matrix< double, 2, 3 >& matrix )
     return matrix.array( ).isFinite( ).all( );
 }
 
+bool isFinite( const Eigen::Vector2d& vector )
+{
+    return vector.array( ).isFinite( ).all( );
+}
+
 bool isClose( const double lhs, const double rhs, const double tolerance = parserTolerance )
 {
     return std::fabs( lhs - rhs ) <= tolerance * std::max( 1.0, std::max( std::fabs( lhs ), std::fabs( rhs ) ) );
@@ -239,6 +249,18 @@ template< typename Derived1, typename Derived2 >
 bool isClose( const Eigen::MatrixBase< Derived1 >& lhs, const Eigen::MatrixBase< Derived2 >& rhs, const double tolerance = parserTolerance )
 {
     return ( lhs - rhs ).norm( ) <= tolerance * std::max( 1.0, std::max( lhs.norm( ), rhs.norm( ) ) );
+}
+
+template< typename Derived1, typename Derived2 >
+bool isSameOptionalVector( const Eigen::MatrixBase< Derived1 >& lhs, const Eigen::MatrixBase< Derived2 >& rhs )
+{
+    const bool lhsIsFinite = lhs.array( ).isFinite( ).all( );
+    const bool rhsIsFinite = rhs.array( ).isFinite( ).all( );
+    if( lhsIsFinite || rhsIsFinite )
+    {
+        return lhsIsFinite && rhsIsFinite && isClose( lhs, rhs );
+    }
+    return lhs.array( ).isNaN( ).all( ) && rhs.array( ).isNaN( ).all( );
 }
 
 void require( const bool condition, const std::string& message )
@@ -259,11 +281,25 @@ void validateSumImage( const SumImageData& image,
     require( !image.imageId_.empty( ), "Error when reading SUM file " + file + ": missing image ID." );
     require( !image.utcEpochString_.empty( ), "Error when reading SUM file " + file + " (" + image.imageId_ + "): missing UTC epoch." );
     require( hasImageSize, "Error when reading SUM file " + file + " (" + image.imageId_ + "): missing NPX/NLN/THRSH record." );
+    require( image.imageSize_( 0 ) > 0 && image.imageSize_( 1 ) > 0 && image.threshold_ >= 0 && image.maxDn_ >= image.threshold_,
+             "Error when reading SUM file " + file + " (" + image.imageId_ + "): NPX and NLN must be positive and 0 <= THRSH <= MAXDN." );
     require( hasCalibration, "Error when reading SUM file " + file + " (" + image.imageId_ + "): missing MMFL/CTR record." );
+    require( std::isfinite( image.focalLengthMm_ ) && image.focalLengthMm_ > std::numeric_limits< double >::epsilon( ),
+             "Error when reading SUM file " + file + " (" + image.imageId_ + "): MMFL must be finite and positive." );
+    require( isFinite( image.opticalCenter_ ),
+             "Error when reading SUM file " + file + " (" + image.imageId_ + "): CTR coordinates must be finite." );
     require( hasCameraAxes && isFinite( image.cameraAxes_ ),
              "Error when reading SUM file " + file + " (" + image.imageId_ + "): missing one or more CX/CY/CZ records." );
+    const bool hasProperCameraAttitude = ( image.cameraAxes_ * image.cameraAxes_.transpose( ) - Eigen::Matrix3d::Identity( ) ).norm( ) <=
+                    sumCameraRotationMatrixTolerance &&
+            std::fabs( image.cameraAxes_.determinant( ) - 1.0 ) <= sumCameraRotationMatrixTolerance;
+    require( hasProperCameraAttitude,
+             "Error when reading SUM file " + file + " (" + image.imageId_ +
+                     "): CX/CY/CZ must form an orthonormal right-handed rotation matrix." );
     require( hasKMatrix && isFinite( image.kMatrix_ ),
              "Error when reading SUM file " + file + " (" + image.imageId_ + "): missing K-MATRIX record." );
+    require( image.kMatrix_.block< 2, 2 >( 0, 0 ).fullPivLu( ).isInvertible( ),
+             "Error when reading SUM file " + file + " (" + image.imageId_ + "): leading 2x2 K-MATRIX block must be nonsingular." );
 }
 
 void validateLmkLandmark( const LmkLandmarkData& landmark, const std::string& file )
@@ -278,7 +314,11 @@ bool haveSameImageMetadata( const SumImageData& lhs, const SumImageData& rhs )
     return lhs.utcEpochString_ == rhs.utcEpochString_ && lhs.imageSize_ == rhs.imageSize_ && lhs.threshold_ == rhs.threshold_ &&
             lhs.maxDn_ == rhs.maxDn_ && isClose( lhs.focalLengthMm_, rhs.focalLengthMm_ ) &&
             isClose( lhs.opticalCenter_, rhs.opticalCenter_ ) && isClose( lhs.cameraAxes_, rhs.cameraAxes_ ) &&
-            isClose( lhs.kMatrix_, rhs.kMatrix_ );
+            isClose( lhs.kMatrix_, rhs.kMatrix_ ) && isSameOptionalVector( lhs.spacecraftObjectVector_, rhs.spacecraftObjectVector_ ) &&
+            isSameOptionalVector( lhs.sunDirectionBodyFixed_, rhs.sunDirectionBodyFixed_ ) &&
+            isClose( lhs.distortionCoefficients_, rhs.distortionCoefficients_ ) &&
+            isSameOptionalVector( lhs.spacecraftObjectSigma_, rhs.spacecraftObjectSigma_ ) &&
+            isSameOptionalVector( lhs.pointingSigma_, rhs.pointingSigma_ );
 }
 
 bool haveSameLandmarkDefinition( const LmkLandmarkData& lhs, const LmkLandmarkData& rhs )
@@ -734,6 +774,290 @@ std::map< std::string, LmkLandmarkData > readLmkFiles( const std::vector< std::s
         }
     }
     return landmarks;
+}
+
+namespace
+{
+
+//! Check the SUM camera calibration and attitude, also for SumImageData that was built in code.
+void validateSumImageCalibrationAndAttitude( const SumImageData& image )
+{
+    const std::string errorPrefix = "Error when converting SUM image '" + image.imageId_ + "': ";
+    if( image.imageSize_( 0 ) <= 0 || image.imageSize_( 1 ) <= 0 || image.threshold_ < 0 || image.maxDn_ < image.threshold_ )
+    {
+        throw std::runtime_error( errorPrefix + "NPX and NLN must be positive and 0 <= THRSH <= MAXDN." );
+    }
+    if( !std::isfinite( image.focalLengthMm_ ) || image.focalLengthMm_ <= std::numeric_limits< double >::epsilon( ) )
+    {
+        throw std::runtime_error( errorPrefix + "MMFL must be finite and positive." );
+    }
+    if( !image.opticalCenter_.array( ).isFinite( ).all( ) )
+    {
+        throw std::runtime_error( errorPrefix + "CTR coordinates must be finite." );
+    }
+    if( !image.kMatrix_.array( ).isFinite( ).all( ) || !image.kMatrix_.block< 2, 2 >( 0, 0 ).fullPivLu( ).isInvertible( ) )
+    {
+        throw std::runtime_error( errorPrefix + "leading 2x2 K-MATRIX block must be finite and nonsingular." );
+    }
+    if( !image.cameraAxes_.array( ).isFinite( ).all( ) )
+    {
+        throw std::runtime_error( errorPrefix + "CX/CY/CZ entries must be finite." );
+    }
+
+    const double orthogonalityError = ( image.cameraAxes_ * image.cameraAxes_.transpose( ) - Eigen::Matrix3d::Identity( ) ).norm( );
+    const double determinantError = std::fabs( image.cameraAxes_.determinant( ) - 1.0 );
+    if( orthogonalityError > sumCameraRotationMatrixTolerance || determinantError > sumCameraRotationMatrixTolerance )
+    {
+        throw std::runtime_error( errorPrefix + "CX/CY/CZ must form an orthonormal right-handed rotation matrix." );
+    }
+
+    // The SUM DISTORTION row is not a full distortion model. SPC keeps it zero and gives a non-zero Owen model
+    // separately in INIT_LITHOS. Rejecting non-zero values avoids silently simulating a different camera.
+    if( !image.distortionCoefficients_.array( ).isFinite( ).all( ) )
+    {
+        throw std::runtime_error( errorPrefix + "DISTORTION coefficients must be finite." );
+    }
+    if( !image.distortionCoefficients_.isZero( 0.0 ) )
+    {
+        throw std::runtime_error( errorPrefix +
+                                  "non-zero SUM DISTORTION coefficients are unsupported. SPC supplies a non-zero Owen distortion "
+                                  "model separately through INIT_LITHOS. It cannot be reconstructed from this SUM row." );
+    }
+
+    if( image.pointingSigma_.array( ).isFinite( ).any( ) )
+    {
+        if( !image.pointingSigma_.array( ).isFinite( ).all( ) )
+        {
+            throw std::runtime_error( errorPrefix + "SIGMA_PTG must provide either all three components or no components." );
+        }
+        if( ( image.pointingSigma_.array( ) <= 0.0 ).any( ) )
+        {
+            throw std::runtime_error( errorPrefix + "SIGMA_PTG entries must be positive." );
+        }
+    }
+}
+
+void validateReferencedLandmarksHaveDefinitions( const std::vector< SumImageData >& sumImages,
+                                                 const std::map< std::string, LmkLandmarkData >& landmarks )
+{
+    std::map< std::string, std::set< std::string > > missingLandmarkImages;
+    for( const SumImageData& image : sumImages )
+    {
+        for( const SumLandmarkObservation& observation : image.landmarkObservations_ )
+        {
+            if( landmarks.count( observation.landmarkId_ ) == 0 )
+            {
+                missingLandmarkImages[ observation.landmarkId_ ].insert( image.imageId_ );
+            }
+        }
+    }
+
+    if( missingLandmarkImages.empty( ) )
+    {
+        return;
+    }
+
+    std::ostringstream errorMessage;
+    errorMessage << "Error when converting SUM/LMK observations: missing LMK data for " << missingLandmarkImages.size( )
+                 << " landmark(s): ";
+    bool firstLandmark = true;
+    for( const auto& missingEntry : missingLandmarkImages )
+    {
+        errorMessage << ( firstLandmark ? "" : "; " ) << missingEntry.first << " referenced by image(s) ";
+        firstLandmark = false;
+
+        bool firstImage = true;
+        for( const std::string& imageId : missingEntry.second )
+        {
+            errorMessage << ( firstImage ? "" : ", " ) << imageId;
+            firstImage = false;
+        }
+    }
+    errorMessage << ".";
+    throw std::runtime_error( errorMessage.str( ) );
+}
+
+std::vector< SumImageData > removeObservationsWithMissingLandmarks( const std::vector< SumImageData >& sumImages,
+                                                                    const std::map< std::string, LmkLandmarkData >& landmarks )
+{
+    std::vector< SumImageData > filteredImages;
+    for( const SumImageData& image : sumImages )
+    {
+        SumImageData filteredImage = image;
+        filteredImage.landmarkObservations_.clear( );
+        for( const SumLandmarkObservation& observation : image.landmarkObservations_ )
+        {
+            if( landmarks.count( observation.landmarkId_ ) != 0 )
+            {
+                filteredImage.landmarkObservations_.push_back( observation );
+            }
+        }
+
+        if( !filteredImage.landmarkObservations_.empty( ) )
+        {
+            filteredImages.push_back( filteredImage );
+        }
+    }
+    return filteredImages;
+}
+
+//! Check that every landmark of an image lies in front of the camera, using the SUM SCOBJ vector.
+void validateSumImageGeometryWithScObj( const SumImageData& image, const std::map< std::string, LmkLandmarkData >& landmarks )
+{
+    if( !image.spacecraftObjectVector_.array( ).isFinite( ).all( ) )
+    {
+        return;
+    }
+
+    for( const SumLandmarkObservation& observation : image.landmarkObservations_ )
+    {
+        // SCOBJ points from the spacecraft to the target centre, so the spacecraft sits at -SCOBJ. The landmark
+        // position relative to the spacecraft is therefore VLM + SCOBJ.
+        const Eigen::Vector3d relativeCameraFramePosition =
+                image.cameraAxes_ * ( landmarks.at( observation.landmarkId_ ).bodyFixedPosition_ + image.spacecraftObjectVector_ );
+        if( !relativeCameraFramePosition.array( ).isFinite( ).all( ) ||
+            relativeCameraFramePosition.z( ) <= std::numeric_limits< double >::epsilon( ) )
+        {
+            throw std::runtime_error( "Error when converting SUM image '" + image.imageId_ + "': landmark '" + observation.landmarkId_ +
+                                      "' projects to non-positive camera-frame z using CX/CY/CZ and SCOBJ." );
+        }
+    }
+}
+
+}  // namespace
+
+std::string getSumImageCameraName( const std::string& imageId )
+{
+    const std::string trimmedImageId = trimCopy( imageId );
+    std::string sanitizedId;
+    sanitizedId.reserve( trimmedImageId.size( ) );
+    for( const char character : trimmedImageId )
+    {
+        const bool isAllowed = std::isalnum( static_cast< unsigned char >( character ) ) || character == '_' || character == '-';
+        sanitizedId.push_back( isAllowed ? character : '_' );
+    }
+
+    if( sanitizedId.empty( ) )
+    {
+        throw std::runtime_error( "Error when generating SUM camera name: image ID is empty after trimming." );
+    }
+    return "Camera_" + sanitizedId;
+}
+
+double getSumImageObservationTime( const SumImageData& image )
+{
+    const std::string errorPrefix = "Error when converting SUM UTC epoch for image '" + image.imageId_ + "': ";
+    std::stringstream stream( image.utcEpochString_ );
+    int year = 0;
+    std::string monthString;
+    int day = 0;
+    std::string timeString;
+    stream >> year >> monthString >> day >> timeString;
+    if( stream.fail( ) || timeString.empty( ) )
+    {
+        throw std::runtime_error( errorPrefix + "malformed UTC string '" + image.utcEpochString_ + "'." );
+    }
+
+    std::replace( timeString.begin( ), timeString.end( ), ':', ' ' );
+    std::stringstream timeStream( timeString );
+    int hour = 0;
+    int minute = 0;
+    double seconds = 0.0;
+    timeStream >> hour >> minute >> seconds;
+    if( timeStream.fail( ) )
+    {
+        throw std::runtime_error( errorPrefix + "malformed time field in '" + image.utcEpochString_ + "'." );
+    }
+
+    try
+    {
+        TrackingFileMonthFieldConverter monthConverter( TrackingDataType::month );
+        const int month = static_cast< int >( monthConverter.toDouble( monthString ) );
+        return basic_astrodynamics::DateTime( year, month, day, hour, minute, seconds ).epoch< double >( );
+    }
+    catch( const std::exception& exception )
+    {
+        throw std::runtime_error( errorPrefix + exception.what( ) );
+    }
+}
+
+Eigen::Quaterniond getSumImageRotationFromBodyFixedToCameraFrame( const SumImageData& image )
+{
+    return Eigen::Quaterniond( image.cameraAxes_ ).normalized( );
+}
+
+std::vector< SumImageData > getSumImagesToConvert( const std::vector< SumImageData >& sumImages,
+                                                   const std::map< std::string, LmkLandmarkData >& landmarks,
+                                                   const bool skipObservationsWithMissingLandmarks,
+                                                   const bool validateSpacecraftObjectGeometry )
+{
+    std::vector< SumImageData > imagesToConvert = sumImages;
+    if( skipObservationsWithMissingLandmarks )
+    {
+        imagesToConvert = removeObservationsWithMissingLandmarks( sumImages, landmarks );
+    }
+    else
+    {
+        validateReferencedLandmarksHaveDefinitions( imagesToConvert, landmarks );
+    }
+
+    std::map< std::string, std::string > cameraNameToImageId;
+    for( const SumImageData& image : imagesToConvert )
+    {
+        validateSumImageCalibrationAndAttitude( image );
+        getSumImageObservationTime( image );
+        if( validateSpacecraftObjectGeometry )
+        {
+            validateSumImageGeometryWithScObj( image, landmarks );
+        }
+
+        const std::string cameraName = getSumImageCameraName( image.imageId_ );
+        const auto inserted = cameraNameToImageId.emplace( cameraName, image.imageId_ );
+        if( !inserted.second && inserted.first->second != image.imageId_ )
+        {
+            throw std::runtime_error( "Error when converting SUM/LMK observations: image IDs '" + inserted.first->second + "' and '" +
+                                      image.imageId_ + "' both map to camera name '" + cameraName + "'." );
+        }
+    }
+    return imagesToConvert;
+}
+
+std::vector< std::shared_ptr< data::TrackingSupplementaryData > > getSumLmkTrackingSupplementaryData(
+        const std::vector< SumImageData >& sumImages,
+        const std::map< std::string, LmkLandmarkData >& landmarks,
+        const std::string& targetBodyName,
+        const std::string& receiverBodyName )
+{
+    std::vector< std::shared_ptr< data::TrackingSupplementaryData > > supplementaryData;
+    for( const auto& landmarkEntry : landmarks )
+    {
+        auto landmarkData = std::make_shared< data::TrackingSupplementaryData >( targetBodyName, landmarkEntry.second.landmarkId_ );
+        landmarkData->setReferencePointSupplementaryData(
+                std::make_shared< data::ReferencePointSupplementaryData >( landmarkEntry.second.bodyFixedPosition_ ) );
+        supplementaryData.push_back( landmarkData );
+    }
+
+    for( const SumImageData& image : sumImages )
+    {
+        const std::string cameraName = getSumImageCameraName( image.imageId_ );
+        auto camera = std::make_shared< data::CameraInstrumentSupplementaryData >(
+                cameraName,
+                image.focalLengthMm_,
+                image.opticalCenter_,
+                Eigen::Vector4d( 0.0, static_cast< double >( image.imageSize_( 0 ) ), 0.0, static_cast< double >( image.imageSize_( 1 ) ) ),
+                image.kMatrix_,
+                Eigen::Matrix< double, 6, 1 >::Zero( ),
+                Eigen::Vector3d::Zero( ),
+                std::map< double, Eigen::Quaterniond >(
+                        { { getSumImageObservationTime( image ), getSumImageRotationFromBodyFixedToCameraFrame( image ) } } ) );
+        camera->setPointingReferenceBodyName( targetBodyName );
+        camera->setPointingUncertainty( image.pointingSigma_ );
+
+        auto cameraData = std::make_shared< data::TrackingSupplementaryData >( receiverBodyName, cameraName );
+        cameraData->setInstrumentSupplementaryData( { camera } );
+        supplementaryData.push_back( cameraData );
+    }
+    return supplementaryData;
 }
 
 }  // namespace sum_lmk

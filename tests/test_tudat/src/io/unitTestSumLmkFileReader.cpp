@@ -13,6 +13,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -94,6 +95,25 @@ BOOST_AUTO_TEST_CASE( testReadSumAndLmkFiles )
             projectionModel->projectUnitVectorToPixelLine( image.cameraAxes_ * relativeBodyFixedPosition );
     checkClose( projectedPixelLine( 0 ), 612.0 );
     checkClose( projectedPixelLine( 1 ), 512.0 );
+}
+
+//! The projection model must reject calibrations that cannot define a finite, invertible pixel mapping.
+BOOST_AUTO_TEST_CASE( testPsfCameraCalibrationValidation )
+{
+    const Eigen::Vector2d principalPoint( 512.0, 512.0 );
+    Eigen::Matrix< double, 2, 3 > kMatrix;
+    kMatrix << 10.0, 0.0, 0.0, 0.0, 10.0, 0.0;
+
+    BOOST_CHECK_NO_THROW( system_models::PsfCameraProjectionModel( 100.0, principalPoint, kMatrix ) );
+    BOOST_CHECK_THROW( system_models::PsfCameraProjectionModel( 0.0, principalPoint, kMatrix ), std::runtime_error );
+
+    Eigen::Vector2d nonFinitePrincipalPoint = principalPoint;
+    nonFinitePrincipalPoint( 0 ) = std::numeric_limits< double >::quiet_NaN( );
+    BOOST_CHECK_THROW( system_models::PsfCameraProjectionModel( 100.0, nonFinitePrincipalPoint, kMatrix ), std::runtime_error );
+
+    Eigen::Matrix< double, 2, 3 > singularKMatrix = kMatrix;
+    singularKMatrix.row( 1 ) = 2.0 * singularKMatrix.row( 0 );
+    BOOST_CHECK_THROW( system_models::PsfCameraProjectionModel( 100.0, principalPoint, singularKMatrix ), std::runtime_error );
 }
 
 BOOST_AUTO_TEST_CASE( testSumLmkDuplicateFailures )
@@ -239,6 +259,12 @@ BOOST_AUTO_TEST_CASE( testSumLmkRequiredFieldValidation )
             "0.0 0.0 1.0 CZ\n";
     const std::string kMatrix = "10.0 0.0 0.0 0.0 10.0 0.0 K-MATRIX\n";
     const std::string landmarks = "LANDMARKS\nLMK0001 512.0 512.0\nEND FILE\n";
+    const auto checkInvalidSum = []( const std::string& contents ) {
+        const std::filesystem::path path = makeTemporaryPath( ".sum" );
+        writeTextFile( path, contents );
+        BOOST_CHECK_THROW( input_output::sum_lmk::readSumFile( path.string( ) ), std::runtime_error );
+        std::filesystem::remove( path );
+    };
 
     // Missing K-MATRIX.
     {
@@ -255,6 +281,41 @@ BOOST_AUTO_TEST_CASE( testSumLmkRequiredFieldValidation )
         const std::filesystem::path path = makeTemporaryPath( ".sum" );
         writeTextFile( path, headerNoCz + kMatrix + landmarks );
         BOOST_CHECK_THROW( input_output::sum_lmk::readSumFile( path.string( ) ), std::runtime_error );
+        std::filesystem::remove( path );
+    }
+    // Semantically invalid calibration and attitude records must be rejected as well.
+    checkInvalidSum( "IMGREQ\n2015 JUN 05 07:24:42.053\n0 1024 500 65535 NPX, NLN, THRSH\n" + header.substr( header.find( "100.0" ) ) +
+                     kMatrix + landmarks );
+    checkInvalidSum(
+            "IMGREQ\n2015 JUN 05 07:24:42.053\n1024 1024 500 65535 NPX, NLN, THRSH\n"
+            "0.0 512.0 512.0 MMFL, CTR\n"
+            "1.0 0.0 0.0 CX\n0.0 1.0 0.0 CY\n0.0 0.0 1.0 CZ\n" +
+            kMatrix + landmarks );
+    checkInvalidSum(
+            "IMGREQ\n2015 JUN 05 07:24:42.053\n1024 1024 500 65535 NPX, NLN, THRSH\n"
+            "100.0 nan 512.0 MMFL, CTR\n"
+            "1.0 0.0 0.0 CX\n0.0 1.0 0.0 CY\n0.0 0.0 1.0 CZ\n" +
+            kMatrix + landmarks );
+    checkInvalidSum(
+            "IMGREQ\n2015 JUN 05 07:24:42.053\n1024 1024 500 65535 NPX, NLN, THRSH\n"
+            "100.0 512.0 512.0 MMFL, CTR\n"
+            "1.0 0.0 0.0 CX\n1.0 1.0 0.0 CY\n0.0 0.0 1.0 CZ\n" +
+            kMatrix + landmarks );
+    checkInvalidSum(
+            "IMGREQ\n2015 JUN 05 07:24:42.053\n1024 1024 500 65535 NPX, NLN, THRSH\n"
+            "100.0 512.0 512.0 MMFL, CTR\n"
+            "1.0 0.0 0.0 CX\n0.0 -1.0 0.0 CY\n0.0 0.0 1.0 CZ\n" +
+            kMatrix + landmarks );
+    checkInvalidSum( header + "10.0 0.0 0.0 20.0 0.0 0.0 K-MATRIX\n" + landmarks );
+    // Valid matrices in the full SPC archive have a Frobenius orthogonality error up to
+    // approximately 7.9e-8 from stored numerical precision. This one has 7.8e-8.
+    {
+        const std::filesystem::path path = makeTemporaryPath( ".sum" );
+        writeTextFile( path,
+                       "IMGARCHIVEPRECISION\n2015 JUN 05 07:24:42.053\n1024 1024 500 65535 NPX, NLN, THRSH\n"
+                       "100.0 512.0 512.0 MMFL, CTR\n1.0000000390 0.0 0.0 CX\n0.0 1.0 0.0 CY\n0.0 0.0 1.0 CZ\n" +
+                               kMatrix + landmarks );
+        BOOST_CHECK_NO_THROW( input_output::sum_lmk::readSumFile( path.string( ) ) );
         std::filesystem::remove( path );
     }
     // No landmark rows: a single SUM image parses, but the batch reader discards it.
@@ -363,10 +424,11 @@ BOOST_AUTO_TEST_CASE( testFortranExponentParsing )
 //! Cross-file duplicate handling: identical duplicates accepted; conflicting (image, landmark) throws.
 BOOST_AUTO_TEST_CASE( testSumCrossFileDuplicateHandling )
 {
-    const std::string baseSum =
+    const std::string baseMetadata =
             "IMGDUPX\n2015 JUN 05 07:24:42.053\n1024 1024 500 65535 NPX, NLN, THRSH\n"
             "100.0 512.0 512.0 MMFL, CTR\n1.0 0.0 0.0 CX\n0.0 1.0 0.0 CY\n0.0 0.0 1.0 CZ\n"
-            "10.0 0.0 0.0 0.0 10.0 0.0 K-MATRIX\nLANDMARKS\n";
+            "10.0 0.0 0.0 0.0 10.0 0.0 K-MATRIX\n";
+    const std::string baseSum = baseMetadata + "LANDMARKS\n";
 
     // Identical (image, landmark) across two files: accepted (no double counting).
     {
@@ -384,6 +446,25 @@ BOOST_AUTO_TEST_CASE( testSumCrossFileDuplicateHandling )
         const std::filesystem::path b = makeTemporaryPath( ".sum" );
         writeTextFile( a, baseSum + "LMK0001 512.0 512.0\nEND FILE\n" );
         writeTextFile( b, baseSum + "LMK0001 600.0 512.0\nEND FILE\n" );
+        BOOST_CHECK_THROW( input_output::sum_lmk::readSumFiles( { a.string( ), b.string( ) } ), std::runtime_error );
+        std::filesystem::remove( a );
+        std::filesystem::remove( b );
+    }
+
+    // All optional image metadata that affects conversion or its a-priori must also agree.
+    const std::vector< std::pair< std::string, std::string > > conflictingMetadataRows = {
+        { "0.0 0.0 -10.0 SCOBJ\n", "0.0 0.0 -11.0 SCOBJ\n" },
+        { "1.0 0.0 0.0 SZ\n", "0.0 1.0 0.0 SZ\n" },
+        { "0.0 0.0 0.0 0.0 DISTORTION\n", "1.0 0.0 0.0 0.0 DISTORTION\n" },
+        { "0.1 SIGMA_VSO\n", "0.2 SIGMA_VSO\n" },
+        { "1.0E-4 SIGMA_PTG\n", "2.0E-4 SIGMA_PTG\n" }
+    };
+    for( const auto& conflictingRows : conflictingMetadataRows )
+    {
+        const std::filesystem::path a = makeTemporaryPath( ".sum" );
+        const std::filesystem::path b = makeTemporaryPath( ".sum" );
+        writeTextFile( a, baseMetadata + conflictingRows.first + "LANDMARKS\nLMK0001 512.0 512.0\nEND FILE\n" );
+        writeTextFile( b, baseMetadata + conflictingRows.second + "LANDMARKS\nLMK0002 513.0 512.0\nEND FILE\n" );
         BOOST_CHECK_THROW( input_output::sum_lmk::readSumFiles( { a.string( ), b.string( ) } ), std::runtime_error );
         std::filesystem::remove( a );
         std::filesystem::remove( b );
