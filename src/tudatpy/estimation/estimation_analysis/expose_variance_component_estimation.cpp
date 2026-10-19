@@ -15,6 +15,7 @@
 
 #include <pybind11/eigen.h>
 #include <pybind11/stl.h>
+#include <Eigen/SparseCore>
 
 #include "scalarTypes.h"
 #include "tudat/simulation/estimation_setup/varianceComponentEstimation.h"
@@ -32,9 +33,12 @@ namespace estimation_analysis
 
 void expose_variance_component_estimation( py::module& m )
 {
-    py::class_< tss::VarianceComponentSettings, std::shared_ptr< tss::VarianceComponentSettings > >( m,
-                                                                                                     "VarianceComponentSettings",
-                                                                                                     R"doc(
+    using Settings = tss::VarianceComponentSettings< STATE_SCALAR_TYPE, TIME_TYPE >;
+    using Condition = tom::ObservationSelectionCondition< STATE_SCALAR_TYPE, TIME_TYPE >;
+
+    py::class_< Settings, std::shared_ptr< Settings > >( m,
+                                                         "VarianceComponentSettings",
+                                                         R"doc(
 
          Settings for estimating the weight of each group of observations with Helmert's method.
 
@@ -42,15 +46,15 @@ void expose_variance_component_estimation( py::module& m )
          :meth:`~tudatpy.estimation.estimation_analysis.Estimator.perform_estimation_with_variance_components`.
 
       )doc" )
-            .def_readonly( "groups", &tss::VarianceComponentSettings::groups_ )
-            .def_readwrite( "tolerance", &tss::VarianceComponentSettings::tolerance_ )
-            .def_readwrite( "maximum_iterations", &tss::VarianceComponentSettings::maximumNumberOfIterations_ )
-            .def_readwrite( "minimum_redundancy", &tss::VarianceComponentSettings::minimumRedundancy_ )
-            .def_readwrite( "warm_start", &tss::VarianceComponentSettings::warmStart_ )
-            .def_readwrite( "print_output", &tss::VarianceComponentSettings::printOutput_ );
+            .def_readonly( "groups", &Settings::groups_ )
+            .def_readwrite( "tolerance", &Settings::tolerance_ )
+            .def_readwrite( "maximum_iterations", &Settings::maximumNumberOfIterations_ )
+            .def_readwrite( "minimum_redundancy", &Settings::minimumRedundancy_ )
+            .def_readwrite( "warm_start", &Settings::warmStart_ )
+            .def_readwrite( "print_output", &Settings::printOutput_ );
 
     m.def( "variance_component_settings",
-           &tss::varianceComponentSettings,
+           &tss::varianceComponentSettings< STATE_SCALAR_TYPE, TIME_TYPE >,
            py::arg( "groups" ),
            py::arg( "tolerance" ) = 0.01,
            py::arg( "maximum_iterations" ) = 10,
@@ -66,14 +70,16 @@ void expose_variance_component_estimation( py::module& m )
          divided by its variance factor, and the estimation is repeated until all factors are close to 1. Relative
          weights within a group are kept. Observations that are in no group keep their weights.
 
-         To give each arc of a multi-arc estimation its own weights, define one group per observable type and arc (for
-         instance by combining an observable type parser with a time bounds parser). Each observation set must then lie
-         within one arc.
+         To give each arc of a multi-arc estimation its own weights, define one group per observable type and arc, by
+         combining an observable type condition with a time bounds condition (using ``&``).
+
+         Weight correlations are allowed within a group, and are scaled together with the group. Correlations between
+         different groups are not supported. Outlier rejection during the estimation is not supported.
 
          Parameters
          ----------
-         groups : list[ObservationCollectionParser]
-             One parser per group. Groups must not overlap.
+         groups : list[ObservationSelectionCondition]
+             One selection condition per group. Groups must not overlap.
          tolerance : float, default = 0.01
              The iteration stops when all variance factors differ from 1 by less than this value.
          maximum_iterations : int, default = 10
@@ -163,14 +169,14 @@ void expose_variance_component_estimation( py::module& m )
     m.def(
             "compute_variance_components",
             []( const std::shared_ptr< tss::EstimationOutput< STATE_SCALAR_TYPE, TIME_TYPE > > estimationOutput,
-                const std::shared_ptr< tom::ObservationCollection< STATE_SCALAR_TYPE, TIME_TYPE > > observationCollection,
-                const std::vector< std::shared_ptr< tom::ObservationCollectionParser > >& groups,
+                const std::shared_ptr< tom::ObservationDataset< STATE_SCALAR_TYPE, TIME_TYPE > > observationDataset,
+                const std::vector< Condition >& groups,
                 const double minimumRedundancy ) {
                 return tss::computeHelmertVarianceComponents< STATE_SCALAR_TYPE, TIME_TYPE >(
-                        estimationOutput, observationCollection, groups, minimumRedundancy );
+                        estimationOutput, observationDataset, groups, minimumRedundancy );
             },
             py::arg( "estimation_output" ),
-            py::arg( "observation_collection" ),
+            py::arg( "observation_dataset" ),
             py::arg( "groups" ),
             py::arg( "minimum_redundancy" ) = 1.0,
             R"doc(
@@ -184,10 +190,10 @@ void expose_variance_component_estimation( py::module& m )
          ----------
          estimation_output : :class:`EstimationOutput`
              Output of the estimation. The design matrix must have been saved.
-         observation_collection : :class:`~tudatpy.estimation.observations.ObservationCollection`
-             Observations used in the estimation.
-         groups : list[ObservationCollectionParser]
-             One parser per group. Groups must not overlap.
+         observation_dataset : :class:`~tudatpy.estimation.observations.ObservationDataset`
+             Observations used in the estimation, with the same active observations and weights as during the estimation.
+         groups : list[ObservationSelectionCondition]
+             One selection condition per group. Groups must not overlap.
          minimum_redundancy : float, default = 1.0
              Groups with a smaller redundancy keep a variance factor of 1.
 
@@ -205,9 +211,10 @@ void expose_variance_component_estimation( py::module& m )
                 const Eigen::MatrixXd& normalMatrix,
                 const Eigen::VectorXd& residuals,
                 const std::vector< std::vector< int > >& groupRowIndices,
-                const double minimumRedundancy ) {
+                const double minimumRedundancy,
+                const Eigen::SparseMatrix< double >& weightsMatrix ) {
                 return tss::computeHelmertVarianceComponents(
-                        designMatrix, weights, normalMatrix, residuals, groupRowIndices, minimumRedundancy );
+                        designMatrix, weights, weightsMatrix, normalMatrix, residuals, groupRowIndices, minimumRedundancy );
             },
             py::arg( "design_matrix" ),
             py::arg( "weights" ),
@@ -215,6 +222,7 @@ void expose_variance_component_estimation( py::module& m )
             py::arg( "residuals" ),
             py::arg( "group_row_indices" ),
             py::arg( "minimum_redundancy" ) = 1.0,
+            py::arg( "weights_matrix" ) = Eigen::SparseMatrix< double >( ),
             R"doc(
 
          Function to estimate the variance factor of each group of observations, from the matrices of a least-squares solution.
@@ -236,6 +244,9 @@ void expose_variance_component_estimation( py::module& m )
              Row indices of each group. Groups must not overlap.
          minimum_redundancy : float, default = 1.0
              Groups with a smaller redundancy keep a variance factor of 1.
+         weights_matrix : scipy.sparse.csc_matrix, optional
+             Full weight matrix, if the weights have correlations. Correlations are only allowed within a group. Its diagonal
+             must equal ``weights``. If not given, the weights are diagonal.
 
          Returns
          -------

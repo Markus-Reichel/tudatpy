@@ -216,7 +216,7 @@ void expose_estimation_analysis_estimator( py::module& m )
                     "perform_estimation_with_variance_components",
                     []( tss::OrbitDeterminationManager< STATE_SCALAR_TYPE, TIME_TYPE >& estimator,
                         const std::shared_ptr< tss::EstimationInput< STATE_SCALAR_TYPE, TIME_TYPE > > estimationInput,
-                        const std::shared_ptr< tss::VarianceComponentSettings > settings ) {
+                        const std::shared_ptr< tss::VarianceComponentSettings< STATE_SCALAR_TYPE, TIME_TYPE > > settings ) {
                         return tss::estimateParametersWithVarianceComponents( estimator, estimationInput, settings );
                     },
                     py::arg( "estimation_input" ),
@@ -232,9 +232,10 @@ void expose_estimation_analysis_estimator( py::module& m )
          2. Estimate a variance factor :math:`s_k` for each group :math:`k` with Helmert's equations.
          3. Divide the weights of each group by :math:`s_k`, and repeat until all :math:`s_k` are close to 1.
 
-         The weights in the observation collection of ``estimation_input`` are changed by this function, and end up as the
+         The weights in the observation dataset of ``estimation_input`` are changed by this function, and end up as the
          estimated weights. A priori information and inter-arc continuity constraints are kept fixed. Linear parameter
-         constraints are not supported. The design matrix must be saved (the default).
+         constraints and outlier rejection during the estimation are not supported. The design matrix must be saved (the
+         default).
 
          Parameters
          ----------

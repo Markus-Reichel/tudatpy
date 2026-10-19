@@ -99,6 +99,45 @@ def test_helmert_recovers_true_sigmas():
         assert 1.0 / np.sqrt(helmert_weights[rows[0]]) == pytest.approx(sigma, rel=0.15)
 
 
+def test_block_weights_recover_correlated_noise():
+    """Group 0 has noise correlated in pairs, with matching block weights. Its sigma is recovered."""
+    scipy_sparse = pytest.importorskip("scipy.sparse")
+    rng = np.random.default_rng(7)
+    true_sigmas = [0.5, 20.0]
+    design_matrix, observations, groups = _linear_problem([400, 100], [0.0, true_sigmas[1]])
+    correlation = np.array([[1.0, 0.8], [0.8, 1.0]])
+    cholesky = np.linalg.cholesky(correlation)
+    for pair in range(200):
+        observations[2 * pair : 2 * pair + 2] += true_sigmas[0] * cholesky @ rng.standard_normal(2)
+
+    def weight_matrix(sigma0, sigma1):
+        blocks = [np.linalg.inv(correlation) / sigma0**2] * 200 + [np.eye(100) / sigma1**2]
+        return scipy_sparse.block_diag(
+            [scipy_sparse.coo_array(block) for block in blocks], format="csc"
+        )
+
+    sigmas = np.array([5.0, 2.0])
+    for _ in range(100):
+        weights = weight_matrix(*sigmas)
+        normal_matrix = design_matrix.T @ (weights @ design_matrix)
+        estimate = np.linalg.solve(normal_matrix, design_matrix.T @ (weights @ observations))
+        residuals = observations - design_matrix @ estimate
+        result = estimation_analysis.compute_variance_components_from_matrices(
+            design_matrix,
+            weights.diagonal(),
+            normal_matrix,
+            residuals,
+            groups,
+            weights_matrix=weights,
+        )
+        sigmas = sigmas * np.sqrt(result.variance_factors)
+        if np.max(np.abs(result.variance_factors - 1.0)) < 1.0e-12:
+            break
+
+    assert sigmas[0] == pytest.approx(true_sigmas[0], rel=0.15)
+    assert sigmas[1] == pytest.approx(true_sigmas[1], rel=0.15)
+
+
 def test_overlapping_groups_are_rejected():
     design_matrix, observations, groups = _linear_problem([50, 50], [1.0, 1.0])
     weights = np.ones(len(observations))
@@ -119,6 +158,7 @@ def _orbit_estimation_setup():
     from tudatpy.astro import element_conversion
     from tudatpy.dynamics import environment_setup, parameters_setup, propagation_setup
     from tudatpy.estimation import observable_models_setup, observations_setup
+    from tudatpy.estimation import observations as observation_data
 
     gravitational_parameter = 3.986004418e14
     body_settings = environment_setup.BodyListSettings("SSB", "J2000")
@@ -215,7 +255,7 @@ def _orbit_estimation_setup():
             noise_function=lambda time: rng.normal(0.0, 50.0, 3),
         )
     )
-    observations = observations_setup.observations_wrapper.simulate_observations(
+    observations = observation_data.simulate_observation_dataset(
         settings_list, estimator.observation_simulators, bodies
     )
     return estimator, parameter_set, observations, model_settings
@@ -223,18 +263,18 @@ def _orbit_estimation_setup():
 
 def test_orbit_estimation_with_variance_components():
     """Range and position sigmas, started 10x off, are recovered by the estimator method."""
-    from tudatpy.estimation.observations import observations_processing
+    from tudatpy.estimation.observations import ObservationSelectionCondition as Condition
 
     estimator, parameter_set, observations, model_settings = _orbit_estimation_setup()
 
     groups = [
-        observations_processing.observation_parser(model_settings.one_way_range_type),
-        observations_processing.observation_parser(model_settings.position_observable_type),
+        Condition.observable_type(model_settings.one_way_range_type),
+        Condition.observable_type(model_settings.position_observable_type),
     ]
     true_sigmas = [1.0, 50.0]
     initial_sigmas = [10.0, 5.0]
     for group, sigma in zip(groups, initial_sigmas):
-        observations.set_constant_weight(1.0 / sigma**2, group)
+        observations.set_constant_single_observation_scalar_weight(group, 1.0 / sigma**2)
 
     true_parameters = parameter_set.parameter_vector
     perturbed = true_parameters.copy()
@@ -260,7 +300,7 @@ def test_orbit_estimation_with_variance_components():
     assert estimated_sigmas[1] == pytest.approx(true_sigmas[1], rel=0.3)
 
     # The final weights are left in the observation collection.
-    range_weights = observations.get_concatenated_weights(groups[0])
+    range_weights = observations.get_weight_diagonal(groups[0])
     assert range_weights[0] == pytest.approx(1.0 / estimated_sigmas[0] ** 2, rel=1.0e-12)
 
     # The standalone function gives the same factors on the final output (all close to 1).

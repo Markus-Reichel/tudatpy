@@ -20,6 +20,7 @@
 
 #include <Eigen/Cholesky>
 #include <Eigen/QR>
+#include <Eigen/SparseCore>
 
 #include "tudat/simulation/estimation_setup/varianceComponentEstimation.h"
 
@@ -56,6 +57,32 @@ Eigen::MatrixXd computeGroupNormalMatrix( const Eigen::MatrixXd& designMatrix,
     return normalMatrix.selfadjointView< Eigen::Lower >( );
 }
 
+//! Weight block of the given rows, W_kk, as a sparse matrix in the order of the row indices.
+Eigen::SparseMatrix< double > getGroupWeightBlock( const Eigen::SparseMatrix< double >& weightsMatrix,
+                                                   const std::vector< int >& rowIndices )
+{
+    std::vector< int > localIndex( weightsMatrix.rows( ), -1 );
+    for( unsigned int i = 0; i < rowIndices.size( ); i++ )
+    {
+        localIndex.at( rowIndices.at( i ) ) = i;
+    }
+
+    std::vector< Eigen::Triplet< double > > entries;
+    for( unsigned int i = 0; i < rowIndices.size( ); i++ )
+    {
+        for( Eigen::SparseMatrix< double >::InnerIterator it( weightsMatrix, rowIndices.at( i ) ); it; ++it )
+        {
+            if( localIndex.at( it.row( ) ) >= 0 )
+            {
+                entries.emplace_back( localIndex.at( it.row( ) ), i, it.value( ) );
+            }
+        }
+    }
+    Eigen::SparseMatrix< double > groupWeights( rowIndices.size( ), rowIndices.size( ) );
+    groupWeights.setFromTriplets( entries.begin( ), entries.end( ) );
+    return groupWeights;
+}
+
 //! Trace of the product of two matrices, tr(A B), without forming the product.
 double traceOfProduct( const Eigen::MatrixXd& first, const Eigen::MatrixXd& second )
 {
@@ -66,6 +93,18 @@ double traceOfProduct( const Eigen::MatrixXd& first, const Eigen::MatrixXd& seco
 
 VarianceComponentEstimate computeHelmertVarianceComponents( const Eigen::MatrixXd& designMatrix,
                                                             const Eigen::VectorXd& weights,
+                                                            const Eigen::MatrixXd& inverseCovariance,
+                                                            const Eigen::VectorXd& residuals,
+                                                            const std::vector< std::vector< int > >& groupRowIndices,
+                                                            const double minimumRedundancy )
+{
+    return computeHelmertVarianceComponents(
+            designMatrix, weights, Eigen::SparseMatrix< double >( ), inverseCovariance, residuals, groupRowIndices, minimumRedundancy );
+}
+
+VarianceComponentEstimate computeHelmertVarianceComponents( const Eigen::MatrixXd& designMatrix,
+                                                            const Eigen::VectorXd& weights,
+                                                            const Eigen::SparseMatrix< double >& weightsMatrix,
                                                             const Eigen::MatrixXd& inverseCovariance,
                                                             const Eigen::VectorXd& residuals,
                                                             const std::vector< std::vector< int > >& groupRowIndices,
@@ -118,6 +157,40 @@ VarianceComponentEstimate computeHelmertVarianceComponents( const Eigen::MatrixX
         }
     }
 
+    // With full weights, correlations are only allowed between observations of the same group. A correlation between
+    // groups would need a covariance component of its own.
+    const bool useWeightsMatrix = ( weightsMatrix.size( ) > 0 );
+    if( useWeightsMatrix )
+    {
+        if( weightsMatrix.rows( ) != numberOfObservations || weightsMatrix.cols( ) != numberOfObservations )
+        {
+            throw std::runtime_error(
+                    "Error when computing variance components: weight matrix size is inconsistent with the design matrix." );
+        }
+        std::vector< int > groupOfRow( numberOfObservations, -1 );
+        for( int k = 0; k < numberOfGroups; k++ )
+        {
+            for( int row : groupRowIndices.at( k ) )
+            {
+                groupOfRow.at( row ) = k;
+            }
+        }
+        for( int column = 0; column < weightsMatrix.outerSize( ); column++ )
+        {
+            for( Eigen::SparseMatrix< double >::InnerIterator it( weightsMatrix, column ); it; ++it )
+            {
+                if( it.row( ) != column && it.value( ) != 0.0 && groupOfRow.at( it.row( ) ) != groupOfRow.at( column ) )
+                {
+                    throw std::runtime_error(
+                            "Error when computing variance components: observations " + std::to_string( it.row( ) ) + " and " +
+                            std::to_string( column ) +
+                            " have correlated weights but are in different groups (or only one is in a group). Put correlated "
+                            "observations in the same group." );
+                }
+            }
+        }
+    }
+
     // One factorization of the full normal matrix N, used for all products N^-1 N_k.
     Eigen::LDLT< Eigen::MatrixXd > normalMatrixFactorization( inverseCovariance );
     if( normalMatrixFactorization.info( ) != Eigen::Success || !normalMatrixFactorization.isPositive( ) )
@@ -133,13 +206,13 @@ VarianceComponentEstimate computeHelmertVarianceComponents( const Eigen::MatrixX
     for( int k = 0; k < numberOfGroups; k++ )
     {
         VarianceComponentGroupResult& groupResult = estimate.groupResults.at( k );
+        const std::vector< int >& rows = groupRowIndices.at( k );
         double squaredResidualSum = 0.0;
-        for( int row : groupRowIndices.at( k ) )
+        for( int row : rows )
         {
             if( weights( row ) > 0.0 )
             {
                 groupResult.numberOfObservations++;
-                groupResult.weightedSquareSum += weights( row ) * residuals( row ) * residuals( row );
                 squaredResidualSum += residuals( row ) * residuals( row );
             }
         }
@@ -148,7 +221,29 @@ VarianceComponentEstimate computeHelmertVarianceComponents( const Eigen::MatrixX
             groupResult.rmsResidual = std::sqrt( squaredResidualSum / groupResult.numberOfObservations );
         }
 
-        const Eigen::MatrixXd groupNormalMatrix = computeGroupNormalMatrix( designMatrix, weights, groupRowIndices.at( k ) );
+        Eigen::MatrixXd groupNormalMatrix;
+        if( useWeightsMatrix )
+        {
+            // Block weights: N_k = A_k^T W_kk A_k and c_k = v_k^T W_kk v_k.
+            Eigen::MatrixXd groupDesignMatrix( rows.size( ), numberOfParameters );
+            Eigen::VectorXd groupResiduals( rows.size( ) );
+            for( unsigned int i = 0; i < rows.size( ); i++ )
+            {
+                groupDesignMatrix.row( i ) = designMatrix.row( rows.at( i ) );
+                groupResiduals( i ) = residuals( rows.at( i ) );
+            }
+            const Eigen::SparseMatrix< double > groupWeights = getGroupWeightBlock( weightsMatrix, rows );
+            groupNormalMatrix = groupDesignMatrix.transpose( ) * ( groupWeights * groupDesignMatrix );
+            groupResult.weightedSquareSum = groupResiduals.dot( groupWeights * groupResiduals );
+        }
+        else
+        {
+            for( int row : rows )
+            {
+                groupResult.weightedSquareSum += weights( row ) * residuals( row ) * residuals( row );
+            }
+            groupNormalMatrix = computeGroupNormalMatrix( designMatrix, weights, rows );
+        }
         fixedNormalMatrix -= groupNormalMatrix;
         solvedGroupNormalMatrices.at( k ) = normalMatrixFactorization.solve( groupNormalMatrix );
 

@@ -22,12 +22,15 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include <Eigen/Core>
+#include <Eigen/SparseCore>
 
 #include "tudat/astro/orbit_determination/podInputOutputTypes.h"
-#include "tudat/simulation/estimation_setup/observationCollection.h"
+#include "tudat/simulation/estimation_setup/observationCondition.h"
+#include "tudat/simulation/estimation_setup/observationDataset.h"
 #include "tudat/simulation/estimation_setup/orbitDeterminationManager.h"
 
 namespace tudat
@@ -130,14 +133,31 @@ VarianceComponentEstimate computeHelmertVarianceComponents( const Eigen::MatrixX
                                                             const std::vector< std::vector< int > >& groupRowIndices,
                                                             const double minimumRedundancy = 1.0 );
 
+//! Function to estimate variance components with Helmert's method, for weights with correlations.
+/*!
+ * Same as the function above, but with a full (sparse) weight matrix. Correlations are only allowed between observations
+ * of the same group: then N_k = A_k^T W_kk A_k and c_k = v_k^T W_kk v_k. The diagonal of the weight matrix must equal
+ * the given weights. An empty weight matrix means diagonal weights.
+ */
+VarianceComponentEstimate computeHelmertVarianceComponents( const Eigen::MatrixXd& designMatrix,
+                                                            const Eigen::VectorXd& weights,
+                                                            const Eigen::SparseMatrix< double >& weightsMatrix,
+                                                            const Eigen::MatrixXd& inverseCovariance,
+                                                            const Eigen::VectorXd& residuals,
+                                                            const std::vector< std::vector< int > >& groupRowIndices,
+                                                            const double minimumRedundancy = 1.0 );
+
 //! Settings for an estimation in which the weights of observation groups are estimated with Helmert's method.
+template< typename ObservationScalarType = double, typename TimeType = double >
 class VarianceComponentSettings
 {
 public:
+    using ConditionType = observation_models::ObservationSelectionCondition< ObservationScalarType, TimeType >;
+
     /*!
      * Constructor
-     * \param groups One parser per observation group. Each group gets its own variance factor. Observations in no group
-     * keep their weights.
+     * \param groups One selection condition per observation group. Each group gets its own variance factor. Observations
+     * in no group keep their weights.
      * \param tolerance The iteration stops when all variance factors differ from 1 by less than this value
      * \param maximumNumberOfIterations Maximum number of estimations (each one a full least-squares estimation)
      * \param minimumRedundancy Groups with a smaller redundancy are kept fixed
@@ -146,7 +166,7 @@ public:
      * parameter values, so that the a priori values stay the same.
      * \param printOutput Whether to print the variance factors of each iteration
      */
-    VarianceComponentSettings( const std::vector< std::shared_ptr< observation_models::ObservationCollectionParser > >& groups,
+    VarianceComponentSettings( const std::vector< ConditionType >& groups,
                                const double tolerance = 0.01,
                                const int maximumNumberOfIterations = 10,
                                const double minimumRedundancy = 1.0,
@@ -165,7 +185,7 @@ public:
         }
     }
 
-    std::vector< std::shared_ptr< observation_models::ObservationCollectionParser > > groups_;
+    std::vector< ConditionType > groups_;
     double tolerance_;
     int maximumNumberOfIterations_;
     double minimumRedundancy_;
@@ -173,15 +193,16 @@ public:
     bool printOutput_;
 };
 
-inline std::shared_ptr< VarianceComponentSettings > varianceComponentSettings(
-        const std::vector< std::shared_ptr< observation_models::ObservationCollectionParser > >& groups,
+template< typename ObservationScalarType = double, typename TimeType = double >
+std::shared_ptr< VarianceComponentSettings< ObservationScalarType, TimeType > > varianceComponentSettings(
+        const std::vector< observation_models::ObservationSelectionCondition< ObservationScalarType, TimeType > >& groups,
         const double tolerance = 0.01,
         const int maximumNumberOfIterations = 10,
         const double minimumRedundancy = 1.0,
         const bool warmStart = true,
         const bool printOutput = true )
 {
-    return std::make_shared< VarianceComponentSettings >(
+    return std::make_shared< VarianceComponentSettings< ObservationScalarType, TimeType > >(
             groups, tolerance, maximumNumberOfIterations, minimumRedundancy, warmStart, printOutput );
 }
 
@@ -210,53 +231,47 @@ struct VarianceComponentEstimationOutput {
     }
 };
 
-//! Function to get the concatenated row indices (as used in the design matrix) of the observations selected by a parser.
-template< typename ObservationScalarType, typename TimeType >
-std::vector< int > getObservationRowIndices(
-        const std::shared_ptr< observation_models::ObservationCollection< ObservationScalarType, TimeType > > observationCollection,
-        const std::shared_ptr< observation_models::ObservationCollectionParser > observationParser )
-{
-    std::vector< int > rowIndices;
-    auto startAndSizes = observationCollection->getObservationSetStartAndSize( observationParser );
-    for( auto observableIt : startAndSizes )
-    {
-        for( auto linkEndsIt : observableIt.second )
-        {
-            for( auto startAndSize : linkEndsIt.second )
-            {
-                for( int i = 0; i < startAndSize.second; i++ )
-                {
-                    rowIndices.push_back( startAndSize.first + i );
-                }
-            }
-        }
-    }
-    return rowIndices;
-}
-
-//! Function to divide the weights of the observations selected by a parser by a constant factor.
+//! Function to get the rows (in the order used for estimation) of the active observations matching each condition.
 /*!
- * Function to divide the weights of the observations selected by a parser by a constant factor. Relative weights
- * within the selected observations are kept.
+ * Only active observations have rows in the estimation. Observations with more than one component (e.g. position) have one row
+ * per component.
  */
 template< typename ObservationScalarType, typename TimeType >
-void scaleObservationWeights(
-        const std::shared_ptr< observation_models::ObservationCollection< ObservationScalarType, TimeType > > observationCollection,
-        const std::shared_ptr< observation_models::ObservationCollectionParser > observationParser,
-        const double varianceFactor )
+std::vector< std::vector< int > > getEstimationRowIndices(
+        const std::shared_ptr< observation_models::ObservationDataset< ObservationScalarType, TimeType > > observationDataset,
+        const std::vector< observation_models::ObservationSelectionCondition< ObservationScalarType, TimeType > >& groups )
 {
-    for( auto observationSet : observationCollection->getSingleObservationSets( observationParser ) )
+    const std::vector< unsigned int > rowObservationIds =
+            observationDataset->createOrderedObservationVectorData( false ).getObservationIds( );
+
+    std::vector< std::vector< int > > groupRowIndices;
+    for( const auto& group : groups )
     {
-        observationSet->setTabulatedWeights( observationSet->getWeightsVector( ) / varianceFactor );
+        const std::vector< unsigned int > selectedIds = observationDataset->getObservationIdsMatchingCondition( group );
+        const std::unordered_set< unsigned int > selected( selectedIds.begin( ), selectedIds.end( ) );
+        std::vector< int > rows;
+        for( unsigned int row = 0; row < rowObservationIds.size( ); row++ )
+        {
+            if( selected.count( rowObservationIds.at( row ) ) )
+            {
+                rows.push_back( row );
+            }
+        }
+        groupRowIndices.push_back( rows );
     }
+    return groupRowIndices;
 }
 
 //! Function to compute the Helmert variance components of each observation group, from an estimation output.
+/*!
+ * The observation dataset must be in the same state as during the estimation (same active observations and weights), so that
+ * its rows match those of the estimation output.
+ */
 template< typename ObservationScalarType, typename TimeType >
 VarianceComponentEstimate computeHelmertVarianceComponents(
         const std::shared_ptr< EstimationOutput< ObservationScalarType, TimeType > > estimationOutput,
-        const std::shared_ptr< observation_models::ObservationCollection< ObservationScalarType, TimeType > > observationCollection,
-        const std::vector< std::shared_ptr< observation_models::ObservationCollectionParser > >& groups,
+        const std::shared_ptr< observation_models::ObservationDataset< ObservationScalarType, TimeType > > observationDataset,
+        const std::vector< observation_models::ObservationSelectionCondition< ObservationScalarType, TimeType > >& groups,
         const double minimumRedundancy = 1.0 )
 {
     if( !estimationOutput->designMatrixSaved_ )
@@ -266,18 +281,24 @@ VarianceComponentEstimate computeHelmertVarianceComponents(
                 "Enable saving of the design matrix in the estimation settings." );
     }
 
-    std::vector< std::vector< int > > groupRowIndices;
-    for( auto group : groups )
+    // Check that the dataset still matches the estimation output, row by row.
+    const Eigen::VectorXd currentWeights = observationDataset->createOrderedObservationVectorData( false ).getWeightVector( );
+    if( currentWeights.rows( ) != estimationOutput->residuals_.rows( ) ||
+        !( currentWeights - estimationOutput->weightsMatrixDiagonal_ ).isZero( 0.0 ) )
     {
-        groupRowIndices.push_back( getObservationRowIndices( observationCollection, group ) );
+        throw std::runtime_error(
+                "Error when computing variance components: the observation dataset no longer matches the estimation output "
+                "(its active observations or weights have changed)." );
     }
 
-    return computeHelmertVarianceComponents( estimationOutput->getNormalizedDesignMatrix( ),
-                                             estimationOutput->weightsMatrixDiagonal_,
-                                             estimationOutput->getNormalizedInverseCovarianceMatrix( ),
-                                             estimationOutput->residuals_,
-                                             groupRowIndices,
-                                             minimumRedundancy );
+    return computeHelmertVarianceComponents(
+            estimationOutput->getNormalizedDesignMatrix( ),
+            estimationOutput->weightsMatrixDiagonal_,
+            estimationOutput->hasFullWeightMatrix( ) ? estimationOutput->getWeightsMatrix( ) : Eigen::SparseMatrix< double >( ),
+            estimationOutput->getNormalizedInverseCovarianceMatrix( ),
+            estimationOutput->residuals_,
+            getEstimationRowIndices( observationDataset, groups ),
+            minimumRedundancy );
 }
 
 //! Function to estimate parameters, while estimating the weight of each observation group with Helmert's method.
@@ -289,11 +310,12 @@ VarianceComponentEstimate computeHelmertVarianceComponents(
  *  2. Estimate the variance factor s_k of each group with Helmert's equations.
  *  3. Divide the weights of each group by s_k, and go back to 1 until all s_k are close to 1.
  *
- * The weights in the observation collection of the estimation input are changed by this function. Their final values
+ * The weights in the observation dataset of the estimation input are changed by this function. Their final values
  * are the estimated weights. Linear equality constraints on the parameters are not supported.
  *
  * \param orbitDeterminationManager Object used to perform the estimation
- * \param estimationInput Input to the estimation. The weights in its observation collection are the starting weights.
+ * \param estimationInput Input to the estimation. The weights in its observation dataset are the starting weights. Outlier rejection is not
+ * supported.
  * \param settings Settings for the variance component estimation
  * \return Output of the last estimation, and the variance factors of each iteration
  */
@@ -301,7 +323,7 @@ template< typename ObservationScalarType, typename TimeType >
 std::shared_ptr< VarianceComponentEstimationOutput< ObservationScalarType, TimeType > > estimateParametersWithVarianceComponents(
         OrbitDeterminationManager< ObservationScalarType, TimeType >& orbitDeterminationManager,
         const std::shared_ptr< EstimationInput< ObservationScalarType, TimeType > > estimationInput,
-        const std::shared_ptr< VarianceComponentSettings > settings )
+        const std::shared_ptr< VarianceComponentSettings< ObservationScalarType, TimeType > > settings )
 {
     using ParameterVectorType = Eigen::Matrix< ObservationScalarType, Eigen::Dynamic, 1 >;
 
@@ -321,19 +343,26 @@ std::shared_ptr< VarianceComponentEstimationOutput< ObservationScalarType, TimeT
         throw std::runtime_error( "Error in variance component estimation: linear parameter constraints are not supported." );
     }
 
-    auto observationCollection = estimationInput->getObservationCollection( );
-
-    // Check that the groups are not empty and do not overlap.
-    std::vector< bool > isRowInGroup( observationCollection->getTotalObservableSize( ), false );
-    for( unsigned int k = 0; k < settings->groups_.size( ); k++ )
+    if( estimationInput->getOutlierRejectionSettings( ) != nullptr )
     {
-        std::vector< int > rowIndices = getObservationRowIndices( observationCollection, settings->groups_.at( k ) );
-        if( rowIndices.empty( ) )
+        throw std::runtime_error(
+                "Error in variance component estimation: outlier rejection during the estimation is not supported, because it "
+                "changes the observations of each group. Reject outliers before the variance component estimation." );
+    }
+
+    auto observationDataset = estimationInput->getObservationDataset( );
+
+    // Check that the groups are not empty and do not overlap. Group membership is fixed during the iteration.
+    const std::vector< std::vector< int > > groupRowIndices = getEstimationRowIndices( observationDataset, settings->groups_ );
+    std::vector< bool > isRowInGroup( observationDataset->createOrderedObservationVectorData( false ).getObservationIds( ).size( ), false );
+    for( unsigned int k = 0; k < groupRowIndices.size( ); k++ )
+    {
+        if( groupRowIndices.at( k ).empty( ) )
         {
             throw std::runtime_error( "Error in variance component estimation: group " + std::to_string( k ) +
-                                      " contains no observations." );
+                                      " contains no active observations." );
         }
-        for( int row : rowIndices )
+        for( int row : groupRowIndices.at( k ) )
         {
             if( isRowInGroup.at( row ) )
             {
@@ -375,7 +404,7 @@ std::shared_ptr< VarianceComponentEstimationOutput< ObservationScalarType, TimeT
         output->leastSquaresBestIterations.push_back( output->estimationOutput->bestIteration_ );
 
         VarianceComponentEstimate estimate = computeHelmertVarianceComponents(
-                output->estimationOutput, observationCollection, settings->groups_, settings->minimumRedundancy_ );
+                output->estimationOutput, observationDataset, settings->groups_, settings->minimumRedundancy_ );
 
         bool isConverged = true;
         for( unsigned int k = 0; k < estimate.groupResults.size( ); k++ )
@@ -418,7 +447,7 @@ std::shared_ptr< VarianceComponentEstimationOutput< ObservationScalarType, TimeT
                 throw std::runtime_error( "Error in variance component estimation: invalid variance factor " +
                                           std::to_string( varianceFactor ) + " for group " + std::to_string( k ) + "." );
             }
-            scaleObservationWeights( observationCollection, settings->groups_.at( k ), varianceFactor );
+            observationDataset->scaleWeights( settings->groups_.at( k ), 1.0 / varianceFactor );
             totalVarianceFactors( k ) *= varianceFactor;
         }
     }

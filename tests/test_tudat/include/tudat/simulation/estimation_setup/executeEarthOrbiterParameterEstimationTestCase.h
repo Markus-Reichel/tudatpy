@@ -12,6 +12,8 @@
 #ifndef EXECUTEEARTHORBITERPARAMETERESTIMATIONTESTCASE_H
 #define EXECUTEEARTHORBITERPARAMETERESTIMATIONTESTCASE_H
 
+#include <functional>
+
 #include "tudat/simulation/estimation_setup/orbitDeterminationTestCaseUtilities.h"
 #include "tudat/simulation/environment_setup/createBodiesFactory.h"
 #include "tudat/simulation/environment_setup/defaultBodies.h"
@@ -43,7 +45,10 @@ Eigen::VectorXd executeEarthOrbiterParameterEstimation(
         const int numberOfIterations = 5,
         const bool useFullParameterSet = true,
         const bool saveDesignMatrix = true,
-        const std::shared_ptr< interpolators::InterpolatorSettings > integratedStateInterpolatorSettings = nullptr )
+        const std::shared_ptr< interpolators::InterpolatorSettings > integratedStateInterpolatorSettings = nullptr,
+        const std::function< void( const std::shared_ptr< observation_models::ObservationDataset< StateScalarType, TimeType > >&,
+                                   const std::shared_ptr< EstimationInput< StateScalarType, TimeType > >& ) >& configureEstimation =
+                nullptr )
 {
     // Load spice kernels.
     spice_interface::loadStandardSpiceKernels( );
@@ -295,15 +300,17 @@ Eigen::VectorXd executeEarthOrbiterParameterEstimation(
             getObservationSimulationSettings< TimeType >( linkEndsPerObservable, baseTimeList, receiver );
 
     // Simulate observations
-    std::shared_ptr< ObservationCollection< StateScalarType, TimeType > > simulatedObservations =
-            simulateObservations< StateScalarType, TimeType >(
+    std::shared_ptr< ObservationDataset< StateScalarType, TimeType > > simulatedObservations =
+            simulateObservationDataset< StateScalarType, TimeType >(
                     measurementSimulationInput, orbitDeterminationManager.getObservationSimulators( ), bodies );
 
-    std::map< std::shared_ptr< observation_models::ObservationCollectionParser >, double > weightsPerObservationParser;
-    weightsPerObservationParser[ observationParser( one_way_range ) ] = 1.0 / ( 1.0 * 1.0 );
-    weightsPerObservationParser[ observationParser( angular_position ) ] = 1.0 / ( 1.0E-5 * 1.0E-5 );
-    weightsPerObservationParser[ observationParser( one_way_doppler ) ] = 1.0 / ( 1.0E-11 * 1.0E-11 * SPEED_OF_LIGHT * SPEED_OF_LIGHT );
-    simulatedObservations->setConstantWeightPerObservable( weightsPerObservationParser );
+    simulatedObservations->setConstantSingleObservationScalarWeight(
+            ObservationSelectionCondition< StateScalarType, TimeType >::observableType( one_way_range ), 1.0 / ( 1.0 * 1.0 ) );
+    simulatedObservations->setConstantSingleObservationScalarWeight(
+            ObservationSelectionCondition< StateScalarType, TimeType >::observableType( angular_position ), 1.0 / ( 1.0E-5 * 1.0E-5 ) );
+    simulatedObservations->setConstantSingleObservationScalarWeight(
+            ObservationSelectionCondition< StateScalarType, TimeType >::observableType( one_way_doppler ),
+            1.0 / ( 1.0E-11 * 1.0E-11 * SPEED_OF_LIGHT * SPEED_OF_LIGHT ) );
 
     // Perturb parameter estimate
     Eigen::Matrix< StateScalarType, Eigen::Dynamic, 1 > initialParameterEstimate =
@@ -332,6 +339,10 @@ Eigen::VectorXd executeEarthOrbiterParameterEstimation(
     // Final argument retains the variational results per iteration, which are checked by the calling unit tests.
     estimationInput->defineEstimationSettings( true, true, saveDesignMatrix, true, true, true, 1.0E8, true, true );
     estimationInput->setConvergenceChecker( std::make_shared< EstimationConvergenceChecker >( numberOfIterations ) );
+    if( configureEstimation )
+    {
+        configureEstimation( simulatedObservations, estimationInput );
+    }
 
     // Perform estimation
     std::shared_ptr< EstimationOutput< StateScalarType > > estimationOutput =
@@ -356,7 +367,10 @@ Eigen::VectorXd executeEarthOrbiterParameterEstimation(
         const int numberOfIterations = 5,
         const bool useFullParameterSet = true,
         const bool saveDesignMatrix = true,
-        const std::shared_ptr< interpolators::InterpolatorSettings > integratedStateInterpolatorSettings = nullptr )
+        const std::shared_ptr< interpolators::InterpolatorSettings > integratedStateInterpolatorSettings = nullptr,
+        const std::function< void( const std::shared_ptr< observation_models::ObservationDataset< StateScalarType, TimeType > >&,
+                                   const std::shared_ptr< EstimationInput< StateScalarType, TimeType > >& ) >& configureEstimation =
+                nullptr )
 {
     std::pair< int, int > unusedIntegratedStateInterpolatorOrders;
     return executeEarthOrbiterParameterEstimation< TimeType, StateScalarType >( podData,
@@ -366,7 +380,8 @@ Eigen::VectorXd executeEarthOrbiterParameterEstimation(
                                                                                 numberOfIterations,
                                                                                 useFullParameterSet,
                                                                                 saveDesignMatrix,
-                                                                                integratedStateInterpolatorSettings );
+                                                                                integratedStateInterpolatorSettings,
+                                                                                configureEstimation );
 }
 
 }  // namespace unit_tests

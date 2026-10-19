@@ -20,6 +20,7 @@
 #include <boost/test/included/unit_test.hpp>
 
 #include <Eigen/Cholesky>
+#include <Eigen/SparseCore>
 
 #include "tudat/basics/testMacros.h"
 #include "tudat/astro/basic_astro/orbitalElementConversions.h"
@@ -273,6 +274,98 @@ BOOST_AUTO_TEST_CASE( test_ConvergenceToTrueSigmas )
     }
 }
 
+//! Group 0 has noise that is correlated in pairs of observations, with block weights that match it. The iteration must
+//! recover both noise levels, with the same result for Helmert's method and the simplified estimator. A correlation between
+//! two groups must be rejected.
+BOOST_AUTO_TEST_CASE( test_BlockWeights )
+{
+    const int numberOfParameters = 6;
+    const std::vector< double > trueSigmas = { 0.5, 20.0 };
+    const double correlation = 0.8;
+    LinearProblem problem = createLinearProblem( { 400, 100 }, { 0.0, trueSigmas.at( 1 ) }, numberOfParameters );
+
+    // Correlated noise in pairs for group 0: e = sigma * L z, with L L^T = R.
+    Eigen::Matrix2d correlationMatrix;
+    correlationMatrix << 1.0, correlation, correlation, 1.0;
+    const Eigen::Matrix2d choleskyFactor = correlationMatrix.llt( ).matrixL( );
+    std::mt19937 generator( 7 );
+    std::normal_distribution< double > normal( 0.0, 1.0 );
+    for( int pair = 0; pair < 200; pair++ )
+    {
+        const Eigen::Vector2d noise = trueSigmas.at( 0 ) * choleskyFactor * Eigen::Vector2d( normal( generator ), normal( generator ) );
+        problem.observations.segment( 2 * pair, 2 ) += noise;
+    }
+
+    // Start 10x off in sigma: group 0 weight blocks R^-1 / 5^2, group 1 weights 1 / 2^2.
+    const Eigen::Matrix2d inverseCorrelation = correlationMatrix.inverse( );
+    auto createWeights = [ & ]( const double sigma0, const double sigma1 ) {
+        std::vector< Eigen::Triplet< double > > entries;
+        for( int pair = 0; pair < 200; pair++ )
+        {
+            for( int i = 0; i < 2; i++ )
+            {
+                for( int j = 0; j < 2; j++ )
+                {
+                    entries.emplace_back( 2 * pair + i, 2 * pair + j, inverseCorrelation( i, j ) / ( sigma0 * sigma0 ) );
+                }
+            }
+        }
+        for( int row = 400; row < 500; row++ )
+        {
+            entries.emplace_back( row, row, 1.0 / ( sigma1 * sigma1 ) );
+        }
+        Eigen::SparseMatrix< double > weights( 500, 500 );
+        weights.setFromTriplets( entries.begin( ), entries.end( ) );
+        return weights;
+    };
+
+    for( int useSimplified = 0; useSimplified < 2; useSimplified++ )
+    {
+        Eigen::SparseMatrix< double > weights = createWeights( 5.0, 2.0 );
+        Eigen::VectorXd totalFactors = Eigen::VectorXd::Ones( 2 );
+        for( int iteration = 0; iteration < 200; iteration++ )
+        {
+            const Eigen::MatrixXd normalMatrix = problem.designMatrix.transpose( ) * ( weights * problem.designMatrix );
+            const Eigen::VectorXd estimate =
+                    normalMatrix.ldlt( ).solve( problem.designMatrix.transpose( ) * ( weights * problem.observations ) );
+            const Eigen::VectorXd residuals = problem.observations - problem.designMatrix * estimate;
+            const Eigen::VectorXd diagonal = weights.diagonal( );
+            VarianceComponentEstimate result = computeHelmertVarianceComponents(
+                    problem.designMatrix, diagonal, weights, normalMatrix, residuals, problem.groupRowIndices );
+
+            double maximumChange = 0.0;
+            for( int k = 0; k < 2; k++ )
+            {
+                const double factor =
+                        useSimplified ? result.groupResults.at( k ).simplifiedVarianceFactor : result.groupResults.at( k ).varianceFactor;
+                totalFactors( k ) *= factor;
+                maximumChange = std::max( maximumChange, std::fabs( factor - 1.0 ) );
+            }
+            weights = createWeights( 5.0 * std::sqrt( totalFactors( 0 ) ), 2.0 * std::sqrt( totalFactors( 1 ) ) );
+            if( maximumChange < 1.0E-12 )
+            {
+                break;
+            }
+        }
+        BOOST_CHECK_CLOSE_FRACTION( 5.0 * std::sqrt( totalFactors( 0 ) ), trueSigmas.at( 0 ), 0.15 );
+        BOOST_CHECK_CLOSE_FRACTION( 2.0 * std::sqrt( totalFactors( 1 ) ), trueSigmas.at( 1 ), 0.15 );
+    }
+
+    // A correlation between the two groups is rejected.
+    Eigen::SparseMatrix< double > crossGroupWeights = createWeights( 1.0, 1.0 );
+    crossGroupWeights.coeffRef( 0, 450 ) = 0.1;
+    crossGroupWeights.coeffRef( 450, 0 ) = 0.1;
+    const Eigen::MatrixXd normalMatrix = problem.designMatrix.transpose( ) * ( crossGroupWeights * problem.designMatrix );
+    const Eigen::VectorXd diagonal = crossGroupWeights.diagonal( );
+    BOOST_CHECK_THROW( computeHelmertVarianceComponents( problem.designMatrix,
+                                                         diagonal,
+                                                         crossGroupWeights,
+                                                         normalMatrix,
+                                                         Eigen::VectorXd::Zero( 500 ),
+                                                         problem.groupRowIndices ),
+                       std::runtime_error );
+}
+
 //! A group with too little redundancy is kept fixed. Overlapping groups and bad input are rejected.
 BOOST_AUTO_TEST_CASE( test_GroupChecks )
 {
@@ -413,6 +506,9 @@ void runOrbitVarianceComponentEstimation( const bool useMultiArc )
     // True noise: range sigma differs per arc, position sigma is the same for all arcs.
     const std::vector< double > trueRangeSigmas = { 1.0, 3.0 };
     const double truePositionSigma = 50.0;
+    Eigen::Matrix3d positionCorrelation;
+    positionCorrelation << 1.0, 0.5, 0.0, 0.5, 1.0, 0.3, 0.0, 0.3, 1.0;
+    const Eigen::Matrix3d positionCholesky = positionCorrelation.llt( ).matrixL( );
     auto generator = std::make_shared< std::mt19937 >( 1234 );
     auto noiseFunction = [ generator ]( const double sigma, const int size ) {
         return std::function< Eigen::VectorXd( const double ) >( [ generator, sigma, size ]( const double ) {
@@ -448,28 +544,39 @@ void runOrbitVarianceComponentEstimation( const bool useMultiArc )
         }
         auto settings = std::make_shared< TabulatedObservationSimulationSettings< double > >(
                 position_observable, positionLinkEnds, positionTimes, observed_body );
-        settings->setObservationNoiseFunction( noiseFunction( truePositionSigma, 3 ) );
+        const auto independentNoise = noiseFunction( truePositionSigma, 3 );
+        settings->setObservationNoiseFunction( std::function< Eigen::VectorXd( const double ) >(
+                [ independentNoise, positionCholesky ]( const double time ) -> Eigen::VectorXd {
+                    return positionCholesky * independentNoise( time );
+                } ) );
         simulationSettings.push_back( settings );
     }
-    std::shared_ptr< ObservationCollection< double, double > > observations =
-            simulateObservations< double, double >( simulationSettings, orbitDeterminationManager.getObservationSimulators( ), bodies );
+    std::shared_ptr< ObservationDataset< double, double > > observations = simulateObservationDataset< double, double >(
+            simulationSettings, orbitDeterminationManager.getObservationSimulators( ), bodies );
 
     // Groups: observable type, per arc.
-    std::vector< std::shared_ptr< ObservationCollectionParser > > groups;
+    using Condition = ObservationSelectionCondition< double, double >;
+    std::vector< Condition > groups;
     std::vector< double > trueSigmas, initialSigmas;
     for( ObservableType observableType : { one_way_range, position_observable } )
     {
         for( int arc = 0; arc < numberOfArcs; arc++ )
         {
-            const std::vector< std::shared_ptr< ObservationCollectionParser > > groupConditions = {
-                observationParser( observableType ), observationParser( std::make_pair( arcStartTimes.at( arc ), arcEndTimes.at( arc ) ) )
-            };
-            groups.push_back( observationParser( groupConditions, true ) );
+            groups.push_back( Condition::observableType( observableType ) &&
+                              Condition::timeBounds( arcStartTimes.at( arc ), arcEndTimes.at( arc ) ) );
             trueSigmas.push_back( observableType == one_way_range ? trueRangeSigmas.at( arc ) : truePositionSigma );
 
             // Start a factor 10 off: range weights too low, position weights too high.
             initialSigmas.push_back( observableType == one_way_range ? 10.0 : 5.0 );
-            observations->setConstantWeight( 1.0 / ( initialSigmas.back( ) * initialSigmas.back( ) ), groups.back( ) );
+            if( observableType == one_way_range )
+            {
+                observations->setConstantSingleObservationScalarWeight( groups.back( ), 1.0 / ( 10.0 * 10.0 ) );
+            }
+            else
+            {
+                // Correlated position components, with a weight matrix that matches the noise correlation.
+                observations->setConstantSingleObservationMatrixWeight( groups.back( ), positionCorrelation.inverse( ) / ( 5.0 * 5.0 ) );
+            }
         }
     }
 
@@ -486,7 +593,7 @@ void runOrbitVarianceComponentEstimation( const bool useMultiArc )
             observations, Eigen::MatrixXd::Zero( 0, 0 ), estimationConvergenceChecker( 6 ) );
     estimationInput->defineEstimationSettings( true, true, true, false, false, false );
 
-    auto settings = varianceComponentSettings( groups, 0.01, 15 );
+    auto settings = varianceComponentSettings< double, double >( groups, 0.01, 15 );
     auto output = estimateParametersWithVarianceComponents( orbitDeterminationManager, estimationInput, settings );
 
     BOOST_CHECK( output->isConverged );
@@ -500,9 +607,10 @@ void runOrbitVarianceComponentEstimation( const bool useMultiArc )
         const bool isRangeGroup = ( k < static_cast< unsigned int >( numberOfArcs ) );
         BOOST_CHECK_CLOSE_FRACTION( estimatedSigma, trueSigmas.at( k ), isRangeGroup ? 0.08 : 0.3 );
 
-        // The weights in the observation collection are the final, estimated weights.
-        const Eigen::VectorXd groupWeights = observations->getConcatenatedWeights( groups.at( k ) );
-        BOOST_CHECK_CLOSE_FRACTION( groupWeights( 0 ), 1.0 / ( estimatedSigma * estimatedSigma ), 1.0E-12 );
+        // The weights in the observation dataset are the final, estimated weights. Position weights keep their correlation.
+        const Eigen::VectorXd groupWeights = observations->getWeightDiagonal( groups.at( k ) );
+        const double expectedWeight = ( isRangeGroup ? 1.0 : positionCorrelation.inverse( )( 0, 0 ) ) / ( estimatedSigma * estimatedSigma );
+        BOOST_CHECK_CLOSE_FRACTION( groupWeights( 0 ), expectedWeight, 1.0E-12 );
     }
 
     // The estimated orbit is close to the truth (within a few range sigmas).
