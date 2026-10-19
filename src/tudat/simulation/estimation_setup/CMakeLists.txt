@@ -67,6 +67,7 @@ set(estimation_HEADERS
         createObservationCollection.h
         interArcStateContinuityConstraintSettings.h
         interArcContinuityConstraint.h
+        varianceComponentEstimation.h
         compressDopplerObservationCollection.h
         )
 
@@ -99,6 +100,7 @@ set(estimation_SOURCES
         processOdfFile.cpp
         processTrackingTxtFile.cpp
         interArcContinuityConstraint.cpp
+        varianceComponentEstimation.cpp
         interArcStateContinuityConstraintSettings.cpp
         )
 
