@@ -41,6 +41,10 @@ Functions
 
    general_continuity
 
+   variance_component_settings
+
+   compute_variance_components
+
 
 
 
@@ -70,6 +74,10 @@ Functions
 
 .. autofunction:: tudatpy.estimation.estimation_analysis.general_continuity
 
+.. autofunction:: tudatpy.estimation.estimation_analysis.variance_component_settings
+
+.. autofunction:: tudatpy.estimation.estimation_analysis.compute_variance_components
+
 Classes
 -------
 .. currentmodule:: tudatpy.estimation.estimation_analysis
@@ -95,6 +103,14 @@ Classes
    SimpleOutlierRejectionSettings
 
    InterArcStateContinuityConstraintSettings
+
+   VarianceComponentSettings
+
+   VarianceComponentEstimationOutput
+
+   VarianceComponentEstimate
+
+   VarianceComponentGroupResult
 
 
 
@@ -136,4 +152,16 @@ Classes
    :members:
 
 .. autoclass:: tudatpy.estimation.estimation_analysis.SimpleOutlierRejectionSettings
+   :members:
+
+.. autoclass:: tudatpy.estimation.estimation_analysis.VarianceComponentSettings
+   :members:
+
+.. autoclass:: tudatpy.estimation.estimation_analysis.VarianceComponentEstimationOutput
+   :members:
+
+.. autoclass:: tudatpy.estimation.estimation_analysis.VarianceComponentEstimate
+   :members:
+
+.. autoclass:: tudatpy.estimation.estimation_analysis.VarianceComponentGroupResult
    :members:
