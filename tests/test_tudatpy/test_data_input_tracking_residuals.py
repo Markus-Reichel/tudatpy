@@ -994,6 +994,7 @@ def test_sum_lmk_ingestion_and_pixel_residuals():
         [str(data_directory / "LMK0001.lmk"), str(data_directory / "LMK0002.lmk")],
         "Target",
         "Spacecraft",
+        "Camera",
     )
     assert len(tracking_data) == 2
 
@@ -1015,7 +1016,7 @@ def test_sum_lmk_ingestion_and_pixel_residuals():
     set_tracking_supplementary_data_in_bodies(bodies, supplementary_data)
     dataset = create_observation_dataset_from_tracking_data(tracking_data, bodies)
 
-    assert "Camera_IMG001" in bodies.get("Spacecraft").system_models.camera_dict
+    assert "Camera" in bodies.get("Spacecraft").system_models.camera_dict
     assert set(bodies.get("Target").ground_station_list) == {"LMK0001", "LMK0002"}
     np.testing.assert_allclose(
         np.concatenate(dataset.get_observations(ordering="estimation")),
@@ -1065,6 +1066,7 @@ def test_sum_lmk_landmark_position_helpers():
         [str(data_directory / "LMK0001.lmk"), str(data_directory / "LMK0002.lmk")],
         "Target",
         "Spacecraft",
+        "Camera",
     )
 
     # The fixture gives SIGMA_LMK = 1 m.
@@ -1101,7 +1103,7 @@ def test_sum_lmk_landmark_position_helpers():
 
     # Camera pointing estimated: the inverse a-priori covariance is 1 / (1e-4 rad)^2 on the diagonal.
     pointing_set = parameters_setup.create_parameter_set(
-        [parameters_setup.camera_pointing_correction("Spacecraft", "Camera_IMG001")], bodies
+        [parameters_setup.camera_pointing_correction("Spacecraft", "Camera")], bodies
     )
     pointing_entries = get_camera_pointing_inverse_apriori_covariance_entries(supplementary_data)
     assert len(pointing_entries) == 1
