@@ -27,7 +27,6 @@
 #include "tudat/astro/orbit_determination/observation_partials/directObservationPartial.h"
 #include "tudat/astro/orbit_determination/observation_partials/oneWayDopplerPartial.h"
 #include "tudat/astro/orbit_determination/observation_partials/oneWayRangePartial.h"
-#include "tudat/astro/orbit_determination/observation_partials/pixelCoordinatesPointingPartial.h"
 #include "tudat/math/interpolators/interpolator.h"
 #include "tudat/simulation/estimation_setup/createCartesianStatePartials.h"
 #include "tudat/simulation/estimation_setup/createClockPartials.h"
@@ -41,6 +40,34 @@ namespace tudat
 
 namespace observation_partials
 {
+
+//! Function to create a direct observation partial w.r.t. a parameter, if the observable depends on that parameter.
+/*!
+ *  Function to create a direct observation partial w.r.t. a parameter, if the observable depends on that parameter: through
+ *  the link-end positions, through the light-time corrections, or directly (as defined by the position partial scaling).
+ *  \param positionPartialScaler Object to scale position partials to observation partials for current link ends.
+ *  \param positionPartials Partials of the link-end positions w.r.t. the parameter.
+ *  \param parameterIdentifier Identifier of the parameter w.r.t. which the partial is to be created.
+ *  \param lightTimeCorrectionPartialObjects List of light time correction partials to be used.
+ *  \return Observation partial object w.r.t. the parameter (nullptr if no dependency exists).
+ */
+template< int ObservationSize >
+std::shared_ptr< ObservationPartial< ObservationSize > > createDirectObservationPartial(
+        const std::shared_ptr< DirectPositionPartialScaling< ObservationSize > > positionPartialScaler,
+        const std::map< observation_models::LinkEndType, std::shared_ptr< CartesianStatePartial > >& positionPartials,
+        const estimatable_parameters::EstimatebleParameterIdentifier& parameterIdentifier,
+        const std::vector< std::shared_ptr< observation_partials::LightTimeCorrectionPartial > >& lightTimeCorrectionPartialObjects )
+{
+    std::shared_ptr< DirectObservationPartial< ObservationSize > > observationPartial =
+            std::make_shared< DirectObservationPartial< ObservationSize > >(
+                    positionPartialScaler, positionPartials, parameterIdentifier, lightTimeCorrectionPartialObjects );
+    if( positionPartials.size( ) > 0 || observationPartial->getNumberOfLighTimeCorrectionPartialsFunctions( ) > 0 ||
+        observationPartial->useLinkIndependentPartials( ) )
+    {
+        return observationPartial;
+    }
+    return nullptr;
+}
 
 //! Function to generate observation partial wrt a single  parameter.
 /*!
@@ -64,28 +91,11 @@ std::shared_ptr< ObservationPartial< ObservationSize > > createObservationPartia
         const std::vector< std::shared_ptr< observation_partials::LightTimeCorrectionPartial > >& lightTimeCorrectionPartialObjects =
                 std::vector< std::shared_ptr< observation_partials::LightTimeCorrectionPartial > >( ) )
 {
-    std::shared_ptr< ObservationPartial< ObservationSize > > observationPartial;
-
-    {
-        std::map< observation_models::LinkEndType, std::shared_ptr< CartesianStatePartial > > positionPartials =
-                createCartesianStatePartialsWrtParameter( oneWayLinkEnds, bodies, parameterToEstimate );
-
-        // Create observation partials if any position partials are created (i.e. if any dependency
-        // exists).
-        std::shared_ptr< DirectObservationPartial< ObservationSize > > testObservationPartial =
-                std::make_shared< DirectObservationPartial< ObservationSize > >( positionPartialScaler,
-                                                                                 positionPartials,
-                                                                                 parameterToEstimate->getParameterName( ),
-                                                                                 lightTimeCorrectionPartialObjects );
-        if( positionPartials.size( ) > 0 || testObservationPartial->getNumberOfLighTimeCorrectionPartialsFunctions( ) > 0 ||
-            testObservationPartial->useLinkIndependentPartials( ) )
-        {
-            observationPartial = testObservationPartial;
-        }
-    }
-
-    // Return observation partial object (nullptr if no dependency exists).
-    return observationPartial;
+    return createDirectObservationPartial< ObservationSize >(
+            positionPartialScaler,
+            createCartesianStatePartialsWrtParameter( oneWayLinkEnds, bodies, parameterToEstimate ),
+            parameterToEstimate->getParameterName( ),
+            lightTimeCorrectionPartialObjects );
 }
 
 //! Function to generate observation partial wrt a position of a body.
@@ -109,24 +119,11 @@ std::shared_ptr< ObservationPartial< ObservationSize > > createObservationPartia
         const std::vector< std::shared_ptr< observation_partials::LightTimeCorrectionPartial > >& lightTimeCorrectionPartialObjects =
                 std::vector< std::shared_ptr< observation_partials::LightTimeCorrectionPartial > >( ) )
 {
-    // Create position partials of link ends for current body position
-    std::map< observation_models::LinkEndType, std::shared_ptr< CartesianStatePartial > > positionPartials =
-            createCartesianStatePartialsWrtBodyState( oneWayLinkEnds, bodies, bodyToEstimate );
-
-    // Create observation partials if any position partials are created (i.e. if any dependency
-    // exists).
-    std::shared_ptr< DirectObservationPartial< ObservationSize > > observationPartial;
-    if( positionPartials.size( ) > 0 )
-    {
-        observationPartial = std::make_shared< DirectObservationPartial< ObservationSize > >(
-                positionPartialScaler,
-                positionPartials,
-                std::make_pair( estimatable_parameters::initial_body_state, std::make_pair( bodyToEstimate, "" ) ),
-                lightTimeCorrectionPartialObjects );
-    }
-
-    // Return observation partial object (nullptr if no dependency exists).
-    return observationPartial;
+    return createDirectObservationPartial< ObservationSize >(
+            positionPartialScaler,
+            createCartesianStatePartialsWrtBodyState( oneWayLinkEnds, bodies, bodyToEstimate ),
+            std::make_pair( estimatable_parameters::initial_body_state, std::make_pair( bodyToEstimate, "" ) ),
+            lightTimeCorrectionPartialObjects );
 }
 
 //! Function to generate observation partial wrt a rotational state of a body.
@@ -149,24 +146,11 @@ std::shared_ptr< ObservationPartial< ObservationSize > > createObservationPartia
         const std::shared_ptr< DirectPositionPartialScaling< ObservationSize > > positionPartialScaler,
         const std::vector< std::shared_ptr< observation_partials::LightTimeCorrectionPartial > >& lightTimeCorrectionPartialObjects )
 {
-    // Create position partials of link ends for current body position
-    std::map< observation_models::LinkEndType, std::shared_ptr< CartesianStatePartial > > positionPartials =
-            createCartesianStatePartialsWrtBodyRotationalState( oneWayLinkEnds, bodies, bodyToEstimate );
-
-    // Create observation partials if any position partials are created (i.e. if any dependency
-    // exists).
-    std::shared_ptr< DirectObservationPartial< ObservationSize > > observationPartial;
-    if( positionPartials.size( ) > 0 )
-    {
-        observationPartial = std::make_shared< DirectObservationPartial< ObservationSize > >(
-                positionPartialScaler,
-                positionPartials,
-                std::make_pair( estimatable_parameters::initial_body_state, std::make_pair( bodyToEstimate, "" ) ),
-                lightTimeCorrectionPartialObjects );
-    }
-
-    // Return observation partial object (nullptr if no dependency exists).
-    return observationPartial;
+    return createDirectObservationPartial< ObservationSize >(
+            positionPartialScaler,
+            createCartesianStatePartialsWrtBodyRotationalState( oneWayLinkEnds, bodies, bodyToEstimate ),
+            std::make_pair( estimatable_parameters::initial_rotational_body_state, std::make_pair( bodyToEstimate, "" ) ),
+            lightTimeCorrectionPartialObjects );
 }
 
 //! Function to generate observation partials and associated scaler for single link ends.
@@ -228,7 +212,7 @@ createSingleLinkObservationPartials(
     //            std::make_shared< ObservationPartialScalingCreator< ObservationSize > >;
     std::shared_ptr< DirectPositionPartialScaling< ObservationSize > > positionScaling =
             ObservationPartialScalingCreator< ObservationSize >::createPositionScalingObject(
-                    oneWayLinkEnds, observableType, bodies, observationModel );
+                    oneWayLinkEnds, observableType, bodies, observationModel, parametersToEstimate );
 
     // Initialize vector index variables.
     int currentIndex = 0;
@@ -328,33 +312,7 @@ createSingleLinkObservationPartials(
         // Create observation partial for current parameter
         std::shared_ptr< ObservationPartial< ObservationSize > > currentObservationPartial;
 
-        if( parameterIterator->second->getParameterName( ).first == estimatable_parameters::camera_pointing_correction )
-        {
-            if( observableType == observation_models::pixel_coordinates )
-            {
-                if constexpr( ObservationSize == 2 )
-                {
-                    const observation_models::LinkEndId receiverLinkEnd = oneWayLinkEnds.at( observation_models::receiver );
-                    const estimatable_parameters::EstimatebleParameterIdentifier parameterIdentifier =
-                            parameterIterator->second->getParameterName( );
-                    if( parameterIdentifier.second.first == receiverLinkEnd.bodyName_ &&
-                        parameterIdentifier.second.second == receiverLinkEnd.getReferencePointName( ) )
-                    {
-                        std::shared_ptr< PixelCoordinatesScaling > pixelCoordinatesScaling =
-                                std::dynamic_pointer_cast< PixelCoordinatesScaling >( positionScaling );
-                        if( pixelCoordinatesScaling == nullptr )
-                        {
-                            throw std::runtime_error(
-                                    "Error when creating pixel-coordinate pointing partial: position scaling is not "
-                                    "PixelCoordinatesScaling." );
-                        }
-                        currentObservationPartial =
-                                std::make_shared< PixelCoordinatesPointingPartial >( pixelCoordinatesScaling, parameterIterator->second );
-                    }
-                }
-            }
-        }
-        else if( !isParameterObservationLinkProperty( parameterIterator->second->getParameterName( ).first ) )
+        if( !isParameterObservationLinkProperty( parameterIterator->second->getParameterName( ).first ) )
         {
             currentObservationPartial = createObservationPartialWrtParameter< Eigen::VectorXd, ObservationSize >(
                     oneWayLinkEnds, bodies, parameterIterator->second, positionScaling, lightTimeCorrectionPartialObjects );

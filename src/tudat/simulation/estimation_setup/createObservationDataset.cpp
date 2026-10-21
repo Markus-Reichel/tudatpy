@@ -731,6 +731,10 @@ void setInstrumentSupplementaryDataInBodies(
                         Eigen::Vector3d::Zero( ),
                         createCameraPointingFunction( bodies, *cameraSupplementaryData ) );
                 simulation_setup::createCamera( bodies.at( bodyName ), cameraSettings );
+                bodies.at( bodyName )
+                        ->getVehicleSystems( )
+                        ->getCamera( cameraSupplementaryData->getCameraId( ) )
+                        ->setPointingReferenceBodyName( cameraSupplementaryData->getPointingReferenceBodyName( ) );
             }
             else
             {
@@ -779,7 +783,7 @@ void setReferencePointSupplementaryDataInBodies(
         {
             const Eigen::Vector3d existingPosition =
                     body->getGroundStation( referencePointName )->getNominalStationState( )->getNominalCartesianPosition( );
-            if( ( existingPosition - position ).norm( ) > 1.0E-9 * std::max( 1.0, position.norm( ) ) )
+            if( !existingPosition.isApprox( position ) )
             {
                 throw std::runtime_error( "Error when setting reference point supplementary data in body " + bodyName +
                                           ": reference point " + referencePointName + " already exists at a different position." );

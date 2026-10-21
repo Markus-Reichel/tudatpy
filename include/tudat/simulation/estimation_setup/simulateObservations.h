@@ -15,8 +15,6 @@
 #include <functional>
 #include <map>
 #include <memory>
-
-#include <functional>
 #include <cmath>
 
 #include "tudat/astro/observation_models/observationSimulator.h"

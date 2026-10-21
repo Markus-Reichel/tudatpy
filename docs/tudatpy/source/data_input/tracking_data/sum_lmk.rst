@@ -16,6 +16,9 @@ and converting it to objects that Tudat can process further. See also
 better understanding what data is being loaded before it is processed into
 Tudat-compatible objects.
 
+Each image and each landmark may be provided only once; a repeated image or
+landmark ID raises an error.
+
 .. currentmodule:: tudatpy.data_input.tracking_data.sum_lmk
 
 .. autofunction:: read_sum_lmk_data
