@@ -18,10 +18,10 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
-#include "tudat/astro/basic_astro/physicalConstants.h"
 #include "tudat/astro/ephemerides/rotationalEphemeris.h"
 #include "tudat/astro/observation_models/lightTimeSolution.h"
 #include "tudat/astro/observation_models/observationModel.h"
+#include "tudat/astro/observation_models/stellarAberrationCorrection.h"
 #include "tudat/astro/system_models/camera.h"
 
 namespace tudat
@@ -29,16 +29,6 @@ namespace tudat
 
 namespace observation_models
 {
-
-//! Convert a geometric unit direction to an apparent direction using inverse Jacobson stellar aberration.
-inline Eigen::Vector3d computeApparentDirectionWithStellarAberration( const Eigen::Vector3d& actualDirection,
-                                                                      const Eigen::Vector3d& observerVelocityDividedBySpeedOfLight )
-{
-    const double directionDotVelocity = actualDirection.dot( observerVelocityDividedBySpeedOfLight );
-    const double velocitySquared = observerVelocityDividedBySpeedOfLight.squaredNorm( );
-    const double scaleFactor = -directionDotVelocity + std::sqrt( 1.0 - velocitySquared + directionDotVelocity * directionDotVelocity );
-    return ( scaleFactor * actualDirection + observerVelocityDividedBySpeedOfLight ).normalized( );
-}
 
 //! Class for simulating camera pixel observables.
 /*!
@@ -150,9 +140,8 @@ public:
         Eigen::Vector3d inertialDirectionToProject = inertialRelativePosition.template cast< double >( );
         if( correctForStellarAberration_ )
         {
-            inertialDirectionToProject = computeApparentDirectionWithStellarAberration(
-                    inertialDirectionToProject.normalized( ),
-                    observerState.segment( 3, 3 ).template cast< double >( ) / physical_constants::SPEED_OF_LIGHT );
+            inertialDirectionToProject = calculateApparentDirectionWithStellarAberration(
+                    inertialDirectionToProject.normalized( ), observerState.segment( 3, 3 ).template cast< double >( ) );
         }
 
         Eigen::Vector2d pixelCoordinates;

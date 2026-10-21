@@ -9,7 +9,8 @@
  */
 
 #include <cmath>
-#include "tudat/astro/observation_models/pixelCoordinatesObservationModel.h"
+#include "tudat/astro/basic_astro/physicalConstants.h"
+#include "tudat/astro/observation_models/stellarAberrationCorrection.h"
 #include "tudat/astro/orbit_determination/observation_partials/pixelCoordinatesPartial.h"
 #include "tudat/math/basic/linearAlgebra.h"
 
@@ -75,10 +76,12 @@ Eigen::Matrix< double, 2, 3 > calculatePartialOfPixelsWrtLinkEndPositionCameraFr
     return partial;
 }
 
-void PixelCoordinatesScaling::update( const std::vector< Eigen::Vector6d >& linkEndStates,
-                                      const std::vector< double >& times,
-                                      const observation_models::LinkEndType fixedLinkEnd,
-                                      const Eigen::VectorXd )
+void PixelCoordinatesScaling::update(
+        const std::vector< Eigen::Vector6d >& linkEndStates,
+        const std::vector< double >& times,
+        const observation_models::LinkEndType fixedLinkEnd,
+        const Eigen::VectorXd,
+        const std::shared_ptr< observation_models::ObservationAncillarySimulationSettings > ancillarySettings )
 {
     if( fixedLinkEnd != observation_models::receiver )
     {
@@ -97,28 +100,11 @@ void PixelCoordinatesScaling::update( const std::vector< Eigen::Vector6d >& link
     Eigen::Matrix3d directionPartialWrtReceiverVelocity = Eigen::Matrix3d::Zero( );
     if( correctForStellarAberration_ )
     {
-        const Eigen::Vector3d beta = linkEndStates.at( observerIndex_ ).segment( 3, 3 ) / physical_constants::SPEED_OF_LIGHT;
+        const Eigen::Vector3d receiverVelocity = linkEndStates.at( observerIndex_ ).segment( 3, 3 );
         currentInertialDirectionToProject_ =
-                observation_models::computeApparentDirectionWithStellarAberration( normalizedRelativeRangeVector, beta );
-
-        const double directionDotVelocity = normalizedRelativeRangeVector.dot( beta );
-        const double squareRoot = std::sqrt( 1.0 - beta.squaredNorm( ) + directionDotVelocity * directionDotVelocity );
-        const double scaleFactor = squareRoot - directionDotVelocity;
-        const Eigen::Vector3d unnormalizedApparentDirection = scaleFactor * normalizedRelativeRangeVector + beta;
-        const Eigen::Matrix3d normalizationPartial =
-                ( Eigen::Matrix3d::Identity( ) - currentInertialDirectionToProject_ * currentInertialDirectionToProject_.transpose( ) ) /
-                unnormalizedApparentDirection.norm( );
-        const Eigen::Matrix3d apparentDirectionPartialWrtUnitDirection = scaleFactor * Eigen::Matrix3d::Identity( ) +
-                normalizedRelativeRangeVector * ( ( directionDotVelocity / squareRoot - 1.0 ) * beta.transpose( ) );
-        directionPartialWrtRelativePosition = normalizationPartial * apparentDirectionPartialWrtUnitDirection *
-                ( Eigen::Matrix3d::Identity( ) - normalizedRelativeRangeVector * normalizedRelativeRangeVector.transpose( ) ) /
-                relativeRangeVector.norm( );
-        directionPartialWrtReceiverVelocity = normalizationPartial *
-                ( Eigen::Matrix3d::Identity( ) +
-                  normalizedRelativeRangeVector *
-                          ( -normalizedRelativeRangeVector + ( directionDotVelocity * normalizedRelativeRangeVector - beta ) / squareRoot )
-                                  .transpose( ) ) /
-                physical_constants::SPEED_OF_LIGHT;
+                observation_models::calculateApparentDirectionWithStellarAberration( relativeRangeVector, receiverVelocity );
+        observation_models::calculateStellarAberrationPartials(
+                relativeRangeVector, receiverVelocity, directionPartialWrtRelativePosition, directionPartialWrtReceiverVelocity );
     }
 
     currentRelativeRangeVectorCameraFrame_ = currentRotationFromInertialToCameraFrame_ * currentInertialDirectionToProject_;
@@ -144,7 +130,7 @@ void PixelCoordinatesScaling::update( const std::vector< Eigen::Vector6d >& link
     currentLinkEndType_ = fixedLinkEnd;
 }
 
-bool PixelCoordinatesScaling::useLinkIndependentPartials(
+bool PixelCoordinatesScaling::useLinkIndependentPartialsForParameter(
         const estimatable_parameters::EstimatebleParameterIdentifier& parameterIdentifier )
 {
     return ( pointingCorrectionFunction_ && parameterIdentifier == pointingCorrectionParameterIdentifier_ ) ||
@@ -155,7 +141,7 @@ bool PixelCoordinatesScaling::useLinkIndependentPartials(
 std::vector< std::pair< Eigen::Matrix< double, 2, Eigen::Dynamic >, double > > PixelCoordinatesScaling::getLinkIndependentPartials(
         const estimatable_parameters::EstimatebleParameterIdentifier parameterIdentifier )
 {
-    if( !useLinkIndependentPartials( parameterIdentifier ) )
+    if( !useLinkIndependentPartialsForParameter( parameterIdentifier ) )
     {
         return {};
     }
