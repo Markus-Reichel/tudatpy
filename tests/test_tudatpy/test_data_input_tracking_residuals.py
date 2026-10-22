@@ -990,20 +990,24 @@ def test_sum_lmk_ingestion_and_pixel_residuals():
     """Load SUM/LMK files and process their cameras, landmarks, epochs and pixels."""
     data_directory = _test_data_path() / "sum_lmk"
     tracking_data, supplementary_data = read_sum_lmk_data(
-        [str(data_directory / "sample.sum")],
+        {"Camera": [str(data_directory / "sample.sum")]},
         [str(data_directory / "LMK0001.lmk"), str(data_directory / "LMK0002.lmk")],
         "Target",
         "Spacecraft",
-        "Camera",
     )
     assert len(tracking_data) == 2
+
+    # The camera sits 10 m along Y from the spacecraft centre. This gives a one-pixel line residual at 10 km range.
+    camera_data = next(
+        entry for entry in supplementary_data if entry.instrument_supplementary_data
+    ).instrument_supplementary_data[0]
+    camera_data.body_fixed_position = np.array([0.0, 10.0, 0.0])
 
     spice.load_standard_kernels()
     body_settings = environment_setup.BodyListSettings("SSB", "J2000")
     states = {
         "Target": np.zeros(6),
-        # A 10 m displacement in Y gives a one-pixel line residual at 10 km range.
-        "Spacecraft": np.array([0.0, 10.0, -10000.0, 0.0, 0.0, 0.0]),
+        "Spacecraft": np.array([0.0, 0.0, -10000.0, 0.0, 0.0, 0.0]),
     }
     for name, state in states.items():
         body_settings.add_empty_settings(name)
@@ -1028,6 +1032,8 @@ def test_sum_lmk_ingestion_and_pixel_residuals():
     np.testing.assert_allclose(
         np.asarray(dataset.get_times(), dtype=float), expected_epoch, rtol=0.0, atol=1e-3
     )
+    camera = bodies.get("Spacecraft").system_models.get_camera("Camera")
+    assert camera.picture_ids[camera.get_picture_index(expected_epoch)] == "IMG001"
 
     link_definitions = dataset.link_definitions_for_observable(
         model_settings.pixel_coordinates_type
@@ -1062,11 +1068,10 @@ def test_sum_lmk_landmark_position_helpers():
 
     data_directory = _test_data_path() / "sum_lmk"
     tracking_data, supplementary_data = read_sum_lmk_data(
-        [str(data_directory / "sample.sum")],
+        {"Camera": [str(data_directory / "sample.sum")]},
         [str(data_directory / "LMK0001.lmk"), str(data_directory / "LMK0002.lmk")],
         "Target",
         "Spacecraft",
-        "Camera",
     )
 
     # The fixture gives SIGMA_LMK = 1 m.

@@ -123,6 +123,20 @@ private:
     std::string instrumentSupplementaryDataKind_;
 };
 
+//! Calibration of one picture, for a camera whose calibration changes between pictures (for instance by pixel binning).
+struct CameraPictureCalibration {
+    double focalLength_ = 0.0;
+    Eigen::Vector2d principalPoint_ = Eigen::Vector2d::Zero( );
+    Eigen::Vector4d fieldOfViewBounds_ = Eigen::Vector4d::Zero( );
+    Eigen::Matrix< double, 2, 3 > kMatrix_ = Eigen::Matrix< double, 2, 3 >::Zero( );
+
+    bool operator==( const CameraPictureCalibration& other ) const
+    {
+        return focalLength_ == other.focalLength_ && principalPoint_ == other.principalPoint_ &&
+                fieldOfViewBounds_ == other.fieldOfViewBounds_ && kMatrix_ == other.kMatrix_;
+    }
+};
+
 class CameraInstrumentSupplementaryData : public InstrumentSupplementaryData
 {
 public:
@@ -199,6 +213,40 @@ public:
         pointingReferenceBodyName_ = pointingReferenceBodyName;
     }
 
+    //! Position of the camera in the body-fixed frame of the body that carries it [m]. Zero by default.
+    const Eigen::Vector3d& getBodyFixedPosition( ) const
+    {
+        return bodyFixedPosition_;
+    }
+
+    void setBodyFixedPosition( const Eigen::Vector3d& bodyFixedPosition )
+    {
+        bodyFixedPosition_ = bodyFixedPosition;
+    }
+
+    //! Calibration of each picture, per picture epoch of the pointing history. When empty, all pictures use the calibration of
+    //! the camera.
+    const std::map< double, CameraPictureCalibration >& getPictureCalibrationHistory( ) const
+    {
+        return pictureCalibrationHistory_;
+    }
+
+    void setPictureCalibrationHistory( const std::map< double, CameraPictureCalibration >& pictureCalibrationHistory )
+    {
+        pictureCalibrationHistory_ = pictureCalibrationHistory;
+    }
+
+    //! Identifier of each picture, per picture epoch of the pointing history. Empty when not provided.
+    const std::map< double, std::string >& getPictureIdHistory( ) const
+    {
+        return pictureIdHistory_;
+    }
+
+    void setPictureIdHistory( const std::map< double, std::string >& pictureIdHistory )
+    {
+        pictureIdHistory_ = pictureIdHistory;
+    }
+
     //! A-priori uncertainty of the camera pointing about the three camera axes [rad], per picture epoch of the pointing history.
     //! Empty when not provided.
     const std::map< double, Eigen::Vector3d >& getPointingUncertaintyHistory( ) const
@@ -211,13 +259,14 @@ public:
         pointingUncertaintyHistory_ = pointingUncertaintyHistory;
     }
 
-    //! Merge compatible camera histories; conflicting calibration, attitudes or pointing uncertainties are errors.
+    //! Merge compatible camera histories; conflicting calibrations, attitudes, picture identifiers or pointing uncertainties are
+    //! errors.
     void merge( const CameraInstrumentSupplementaryData& other )
     {
         if( cameraId_ != other.cameraId_ || focalLength_ != other.focalLength_ || !principalPoint_.isApprox( other.principalPoint_ ) ||
             !fieldOfViewBounds_.isApprox( other.fieldOfViewBounds_ ) || !kMatrix_.isApprox( other.kMatrix_ ) ||
             !distortionCoefficients_.isApprox( other.distortionCoefficients_ ) || !mountingOffsets_.isApprox( other.mountingOffsets_ ) ||
-            pointingReferenceBodyName_ != other.pointingReferenceBodyName_ )
+            bodyFixedPosition_ != other.bodyFixedPosition_ || pointingReferenceBodyName_ != other.pointingReferenceBodyName_ )
         {
             throw std::runtime_error( "Inconsistent calibration for PSF camera " + cameraId_ );
         }
@@ -230,6 +279,24 @@ public:
                 throw std::runtime_error( "Conflicting pointing epochs for PSF camera " + cameraId_ );
             }
         }
+        auto mergedPictureCalibrationHistory = pictureCalibrationHistory_;
+        for( const auto& entry : other.pictureCalibrationHistory_ )
+        {
+            const auto inserted = mergedPictureCalibrationHistory.emplace( entry );
+            if( !inserted.second && !( inserted.first->second == entry.second ) )
+            {
+                throw std::runtime_error( "Conflicting picture calibrations for PSF camera " + cameraId_ );
+            }
+        }
+        auto mergedPictureIdHistory = pictureIdHistory_;
+        for( const auto& entry : other.pictureIdHistory_ )
+        {
+            const auto inserted = mergedPictureIdHistory.emplace( entry );
+            if( !inserted.second && inserted.first->second != entry.second )
+            {
+                throw std::runtime_error( "Conflicting picture identifiers for PSF camera " + cameraId_ );
+            }
+        }
         auto mergedUncertaintyHistory = pointingUncertaintyHistory_;
         for( const auto& entry : other.pointingUncertaintyHistory_ )
         {
@@ -240,6 +307,8 @@ public:
             }
         }
         rotationFromInertialToCameraFrameHistory_.swap( mergedHistory );
+        pictureCalibrationHistory_.swap( mergedPictureCalibrationHistory );
+        pictureIdHistory_.swap( mergedPictureIdHistory );
         pointingUncertaintyHistory_.swap( mergedUncertaintyHistory );
     }
 
@@ -261,6 +330,12 @@ private:
     std::map< double, Eigen::Quaterniond > rotationFromInertialToCameraFrameHistory_;
 
     std::string pointingReferenceBodyName_;
+
+    Eigen::Vector3d bodyFixedPosition_ = Eigen::Vector3d::Zero( );
+
+    std::map< double, CameraPictureCalibration > pictureCalibrationHistory_;
+
+    std::map< double, std::string > pictureIdHistory_;
 
     std::map< double, Eigen::Vector3d > pointingUncertaintyHistory_;
 };

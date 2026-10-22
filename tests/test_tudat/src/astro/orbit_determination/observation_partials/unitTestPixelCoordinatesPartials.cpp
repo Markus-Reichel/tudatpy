@@ -181,6 +181,7 @@ BOOST_AUTO_TEST_CASE( testPixelCoordinatesPartials )
 //! w.r.t. the inertial frame. Each step is compared to an independent reference: the landmark positions to the LMK VLM records,
 //! the observation epoch to SPICE, the camera orientation to CX/CY/CZ combined with the target rotation, and the modelled pixels
 //! to the SPC projection evaluated by hand from the SUM/LMK values (and to the measured pixels, within the SPC solution residual).
+//! A 2x2-binned copy of the image, taken by the same camera, checks that each image is projected with its own calibration.
 BOOST_AUTO_TEST_CASE( testSumLmkProcessingRealData )
 {
     spice_interface::loadStandardSpiceKernels( );
@@ -191,6 +192,14 @@ BOOST_AUTO_TEST_CASE( testSumLmkProcessingRealData )
             { testDataPath + "/FA0115.LMK", testDataPath + "/FC0098.LMK", testDataPath + "/GD0036.LMK" } );
     const input_output::sum_lmk::SumImageData& image = sumImages.at( 0 );
     const std::string cameraName = sumLmkTestCameraName;
+
+    // Binning halves the pixel scale, and moves the optical centre to the centre of the binned pixel grid.
+    input_output::sum_lmk::SumImageData binnedImage = image;
+    binnedImage.imageId_ = "W48230079013_BINNED";
+    binnedImage.utcEpochString_ = "2015 APR 14 16:36:27.974";
+    binnedImage.kMatrix_ = 0.5 * image.kMatrix_;
+    binnedImage.opticalCenter_ = ( image.opticalCenter_ - Eigen::Vector2d::Constant( 0.5 ) ) / 2.0;
+    binnedImage.imageSize_ = image.imageSize_ / 2;
 
     // Target at the origin with a constant, non-trivial rotation; spacecraft at -SCOBJ in the target body-fixed frame.
     SystemOfBodies bodies = createSyntheticSumLmkBodies( );
@@ -203,7 +212,7 @@ BOOST_AUTO_TEST_CASE( testSumLmkProcessingRealData )
     spacecraftState.segment( 0, 3 ) = -rotationToInertialFrame * image.spacecraftObjectVector_;
     bodies.at( "Spacecraft" )->setEphemeris( std::make_shared< ConstantEphemeris >( spacecraftState, "SSB", "J2000" ) );
 
-    LoadedPixelTestData loaded = loadPixelTestData( sumImages, landmarks, bodies );
+    LoadedPixelTestData loaded = loadPixelTestData( { image, binnedImage }, landmarks, bodies );
 
     // Landmarks are ground stations at the LMK positions.
     for( const auto& landmark : landmarks )
@@ -225,24 +234,38 @@ BOOST_AUTO_TEST_CASE( testSumLmkProcessingRealData )
                        1.0E-6 );
 
     BOOST_REQUIRE_EQUAL( image.landmarkObservations_.size( ), 3 );
+    for( const input_output::sum_lmk::SumImageData& currentImage : { image, binnedImage } )
+    {
+        for( const input_output::sum_lmk::SumLandmarkObservation& observation : currentImage.landmarkObservations_ )
+        {
+            LinkEnds linkEnds;
+            linkEnds[ transmitter ] = LinkEndId( "Target", observation.landmarkId_ );
+            linkEnds[ receiver ] = LinkEndId( "Spacecraft", cameraName );
+            const std::shared_ptr< ObservationModel< 2, double, double > > model =
+                    ObservationModelCreator< 2, double, double >::createObservationModel(
+                            pixelCoordinatesSettings( LinkDefinition( linkEnds ) ), bodies );
+            const Eigen::Vector2d modelledPixel = model->computeObservations( sumImageTdbTimeForTest( currentImage ), receiver );
+
+            // SPC projection: landmark relative to the spacecraft at VLM + SCOBJ, rotated by CX/CY/CZ, projected with
+            // MMFL/CTR/K-MATRIX.
+            const Eigen::Vector3d cameraFramePosition = currentImage.cameraAxes_ *
+                    ( landmarks.at( observation.landmarkId_ ).bodyFixedPosition_ + currentImage.spacecraftObjectVector_ );
+            const double x = currentImage.focalLengthMm_ * cameraFramePosition.x( ) / cameraFramePosition.z( );
+            const double y = currentImage.focalLengthMm_ * cameraFramePosition.y( ) / cameraFramePosition.z( );
+            const Eigen::Vector2d expectedPixel = currentImage.opticalCenter_ + currentImage.kMatrix_ * Eigen::Vector3d( x, y, x * y );
+            BOOST_CHECK_SMALL( ( modelledPixel - expectedPixel ).norm( ), 1.0E-3 );
+        }
+    }
+
+    // The modelled pixels of the full-resolution image agree with the measured ones, within the SPC solution residual.
     for( const input_output::sum_lmk::SumLandmarkObservation& observation : image.landmarkObservations_ )
     {
         LinkEnds linkEnds;
         linkEnds[ transmitter ] = LinkEndId( "Target", observation.landmarkId_ );
         linkEnds[ receiver ] = LinkEndId( "Spacecraft", cameraName );
-        const std::shared_ptr< ObservationModel< 2, double, double > > model =
-                ObservationModelCreator< 2, double, double >::createObservationModel(
-                        pixelCoordinatesSettings( LinkDefinition( linkEnds ) ), bodies );
-        const Eigen::Vector2d modelledPixel = model->computeObservations( epoch, receiver );
-
-        // SPC projection: landmark relative to the spacecraft at VLM + SCOBJ, rotated by CX/CY/CZ, projected with MMFL/CTR/K-MATRIX.
-        const Eigen::Vector3d cameraFramePosition =
-                image.cameraAxes_ * ( landmarks.at( observation.landmarkId_ ).bodyFixedPosition_ + image.spacecraftObjectVector_ );
-        const double x = image.focalLengthMm_ * cameraFramePosition.x( ) / cameraFramePosition.z( );
-        const double y = image.focalLengthMm_ * cameraFramePosition.y( ) / cameraFramePosition.z( );
-        const Eigen::Vector2d expectedPixel = image.opticalCenter_ + image.kMatrix_ * Eigen::Vector3d( x, y, x * y );
-
-        BOOST_CHECK_SMALL( ( modelledPixel - expectedPixel ).norm( ), 1.0E-3 );
+        const Eigen::Vector2d modelledPixel = ObservationModelCreator< 2, double, double >::createObservationModel(
+                                                      pixelCoordinatesSettings( LinkDefinition( linkEnds ) ), bodies )
+                                                      ->computeObservations( epoch, receiver );
         BOOST_CHECK_SMALL( ( modelledPixel - observation.pixelCoordinates_ ).norm( ), 3.0 );
     }
 }
@@ -511,6 +534,12 @@ BOOST_AUTO_TEST_CASE( testPixelPointingPartialWithAberration )
         BOOST_REQUIRE_EQUAL( partials.first.size( ), 1 );
         BOOST_REQUIRE( std::dynamic_pointer_cast< DirectObservationPartial< 2 > >( partials.first.begin( )->second ) != nullptr );
         const double epoch = loaded.observationDataset_->getTimes( ).front( );
+
+        // The camera finds the picture of an observation from its epoch.
+        const std::shared_ptr< system_models::Camera > camera =
+                bodies.at( "Spacecraft" )->getVehicleSystems( )->getCamera( sumLmkTestCameraName );
+        BOOST_CHECK( camera->getPictureIds( ) == ( std::vector< std::string >{ "IMGFIRST", "IMGSECOND" } ) );
+        BOOST_CHECK_EQUAL( camera->getPictureIds( ).at( camera->getPictureIndex( epoch ) ), "IMGFIRST" );
         const std::function< Eigen::VectorXd( const double ) > observable = [ & ]( const double time ) {
             return Eigen::VectorXd( model->computeObservations( time, receiver ) );
         };

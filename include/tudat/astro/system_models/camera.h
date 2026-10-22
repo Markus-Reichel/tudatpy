@@ -23,6 +23,7 @@
 #include <Eigen/Geometry>
 #include <Eigen/LU>
 
+#include "tudat/math/basic/nearestNeighbourSearch.h"
 #include "tudat/math/basic/rotationRepresentations.h"
 
 namespace tudat
@@ -360,7 +361,7 @@ public:
     }
 
     //! Function to get the rotation from inertial to camera frame of a camera fixed to its host body, including the pointing
-    //! correction of the arc that contains the given time.
+    //! correction of the picture closest to the given time.
     /*!
      *  \param rotationFromInertialToBodyFixedFrame Rotation from inertial frame to the body-fixed frame of the camera host body.
      *  \param secondsSinceEpoch Time at which the rotation is evaluated.
@@ -423,41 +424,74 @@ public:
     Eigen::Vector2d calculateObservableFromInertial( const Eigen::Vector3d& positionOfObservedBodyInInertialFrame,
                                                      const double secondsSinceEpoch ) const
     {
-        return projectionModel_->projectUnitVectorToPixelLine( getRotationFromInertialToCameraFrame( secondsSinceEpoch ) *
-                                                               positionOfObservedBodyInInertialFrame );
+        return getProjectionModel( secondsSinceEpoch )
+                ->projectUnitVectorToPixelLine( getRotationFromInertialToCameraFrame( secondsSinceEpoch ) *
+                                                positionOfObservedBodyInInertialFrame );
     }
 
-    //! Function to set the start times of the pointing correction arcs, and reset all corrections to zero.
+    //! Function to set the pictures taken by the camera, and reset all pointing corrections to zero.
     /*!
-     *  The camera has one pointing correction per arc. Without arc start times, a single correction applies at all times.
-     *  \param arcStartTimes Start time of each arc, in increasing order.
+     *  The camera has one pointing correction per picture. Without pictures, a single correction applies at all times.
+     *  \param pictureEpochs Epoch of each picture, in increasing order.
+     *  \param pictureIds Identifier of each picture, or empty if the pictures have no identifier.
      */
-    void setPointingCorrectionArcStartTimes( const std::vector< double >& arcStartTimes )
+    void setPictures( const std::vector< double >& pictureEpochs, const std::vector< std::string >& pictureIds )
     {
-        pointingCorrectionArcStartTimes_ = arcStartTimes;
-        pointingCorrection_ = Eigen::VectorXd::Zero( 3 * getNumberOfPointingCorrectionArcs( ) );
+        if( !pictureIds.empty( ) && pictureIds.size( ) != pictureEpochs.size( ) )
+        {
+            throw std::runtime_error( "Error when setting pictures of camera " + cameraId_ +
+                                      ": the number of picture identifiers must match the number of picture epochs." );
+        }
+        pictureEpochs_ = Eigen::Map< const Eigen::VectorXd >( pictureEpochs.data( ), pictureEpochs.size( ) );
+        pictureIds_ = pictureIds;
+        pointingCorrection_ = Eigen::VectorXd::Zero( 3 * getNumberOfPointingCorrections( ) );
     }
 
-    int getNumberOfPointingCorrectionArcs( ) const
+    const Eigen::VectorXd& getPictureEpochs( ) const
     {
-        return std::max( 1, static_cast< int >( pointingCorrectionArcStartTimes_.size( ) ) );
+        return pictureEpochs_;
     }
 
-    //! Function to get the index of the pointing correction arc that contains the given time.
+    const std::vector< std::string >& getPictureIds( ) const
+    {
+        return pictureIds_;
+    }
+
+    int getNumberOfPointingCorrections( ) const
+    {
+        return std::max( 1, static_cast< int >( pictureEpochs_.size( ) ) );
+    }
+
+    //! Function to set one projection model per picture, for a camera whose calibration changes between pictures.
     /*!
-     *  \param secondsSinceEpoch Time for which the arc is retrieved. Times before the first arc start use the first arc.
-     *  \return Index of the arc.
+     *  \param pictureProjectionModels Projection model of each picture, in the order of the pictures (see setPictures).
      */
-    int getPointingCorrectionArcIndex( const double secondsSinceEpoch ) const
+    void setPictureProjectionModels( const std::vector< std::shared_ptr< CameraProjectionModel > >& pictureProjectionModels )
     {
-        const auto nextArcIterator =
-                std::upper_bound( pointingCorrectionArcStartTimes_.begin( ), pointingCorrectionArcStartTimes_.end( ), secondsSinceEpoch );
-        return ( nextArcIterator == pointingCorrectionArcStartTimes_.begin( ) )
+        if( pictureProjectionModels.size( ) != static_cast< unsigned int >( pictureEpochs_.size( ) ) )
+        {
+            throw std::runtime_error( "Error when setting picture projection models of camera " + cameraId_ +
+                                      ": the number of projection models must match the number of pictures." );
+        }
+        pictureProjectionModels_ = pictureProjectionModels;
+    }
+
+    //! Function to get the projection model of the picture closest in time to the given time, or the camera's single projection
+    //! model if it has no projection model per picture.
+    std::shared_ptr< CameraProjectionModel > getProjectionModel( const double secondsSinceEpoch ) const
+    {
+        return pictureProjectionModels_.empty( ) ? projectionModel_ : pictureProjectionModels_.at( getPictureIndex( secondsSinceEpoch ) );
+    }
+
+    //! Function to get the index of the picture closest in time to the given time (0 if the camera has no pictures).
+    int getPictureIndex( const double secondsSinceEpoch ) const
+    {
+        return ( pictureEpochs_.size( ) == 0 )
                 ? 0
-                : static_cast< int >( nextArcIterator - pointingCorrectionArcStartTimes_.begin( ) ) - 1;
+                : basic_mathematics::computeNearestNeighborUsingBinarySearch( pictureEpochs_, secondsSinceEpoch );
     }
 
-    //! Function to get the pointing corrections of all arcs, as consecutive rotation vectors (axis times angle, in radians).
+    //! Function to get the pointing corrections of all pictures, as consecutive rotation vectors (axis times angle, in radians).
     Eigen::VectorXd getPointingCorrection( ) const
     {
         return pointingCorrection_;
@@ -468,10 +502,10 @@ public:
         pointingCorrection_ = pointingCorrection;
     }
 
-    //! Function to get the pointing correction of the arc that contains the given time.
+    //! Function to get the pointing correction of the picture closest in time to the given time.
     Eigen::Vector3d getPointingCorrection( const double secondsSinceEpoch ) const
     {
-        return pointingCorrection_.segment< 3 >( 3 * getPointingCorrectionArcIndex( secondsSinceEpoch ) );
+        return pointingCorrection_.segment< 3 >( 3 * getPictureIndex( secondsSinceEpoch ) );
     }
 
 private:
@@ -484,7 +518,7 @@ private:
         return rotationFromBodyFixedToCameraFrame_ * positionOfObservedBodyInBodyFrame;
     }
 
-    /*! \brief Apply the pointing correction of the arc that contains the given time to a nominal rotation to the camera frame.
+    /*! \brief Apply the pointing correction of the picture closest to the given time to a nominal rotation to the camera frame.
      *  The correction is a small rotation expressed in the camera frame, and is therefore applied on the left:
      *  a direction that nominally maps to r_cam maps to Exp(theta) * r_cam once the correction is applied. This
      *  convention is the one differentiated by PixelCoordinatesScaling, and must be kept consistent with it.
@@ -519,10 +553,16 @@ private:
     //! Reference body used by a body-relative direct pointing function.
     std::string pointingReferenceBodyName_;
 
-    //! Start time of each pointing correction arc. Empty for a single arc.
-    std::vector< double > pointingCorrectionArcStartTimes_;
+    //! Epoch of each picture taken by the camera, in increasing order. Empty for a camera without pictures.
+    Eigen::VectorXd pictureEpochs_;
 
-    //! Small rotation-vector correction of each arc, applied by camera pointing estimation.
+    //! Identifier of each picture, or empty if the pictures have no identifier.
+    std::vector< std::string > pictureIds_;
+
+    //! Projection model of each picture, or empty if all pictures use projectionModel_.
+    std::vector< std::shared_ptr< CameraProjectionModel > > pictureProjectionModels_;
+
+    //! Small rotation-vector correction of each picture, applied by camera pointing estimation.
     Eigen::VectorXd pointingCorrection_ = Eigen::VectorXd::Zero( 3 );
 };
 }  // namespace system_models
