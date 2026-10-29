@@ -1085,6 +1085,36 @@ private:
     }
 };
 
+//! Least-squares cost of one estimation iteration, split into its parts
+struct EstimationCost {
+    //! Weighted observation residual cost, 0.5 r^T W r
+    double observationCost = 0.0;
+
+    //! A priori cost, 0.5 dx^T P0^-1 dx, of the deviation from the a priori parameters (zero if this deviation is not used)
+    double aprioriCost = 0.0;
+
+    //! Cost of the soft inter-arc continuity constraints (zero if there are none)
+    double interArcContinuityCost = 0.0;
+
+    //! Function to get the total cost, which is used to select the best iteration
+    double getTotalCost( ) const
+    {
+        return observationCost + aprioriCost + interArcContinuityCost;
+    }
+
+    bool operator==( const EstimationCost& rhs ) const
+    {
+        return ( observationCost == rhs.observationCost ) && ( aprioriCost == rhs.aprioriCost ) &&
+                ( interArcContinuityCost == rhs.interArcContinuityCost );
+    }
+
+    template< class Archive >
+    void serialize( Archive& ar )
+    {
+        ar( CEREAL_NVP( observationCost ), CEREAL_NVP( aprioriCost ), CEREAL_NVP( interArcContinuityCost ) );
+    }
+};
+
 //! Data structure through which the output of the orbit determination is communicated
 template< typename ObservationScalarType = double, typename TimeType = double >
 struct EstimationOutput : public CovarianceAnalysisOutput< ObservationScalarType, TimeType > {
@@ -1255,6 +1285,18 @@ struct EstimationOutput : public CovarianceAnalysisOutput< ObservationScalarType
         return interArcContinuityCostHistory_;
     }
 
+    //! Function to set the cost per iteration
+    void setCostHistory( const std::vector< EstimationCost >& costHistory )
+    {
+        costHistory_ = costHistory;
+    }
+
+    //! Function to get the cost per iteration
+    const std::vector< EstimationCost >& getCostHistory( ) const
+    {
+        return costHistory_;
+    }
+
     void setInterArcContinuityDiscrepancyHistory( const std::vector< std::vector< Eigen::VectorXd > >& history )
     {
         interArcContinuityDiscrepancyHistory_ = history;
@@ -1305,6 +1347,9 @@ struct EstimationOutput : public CovarianceAnalysisOutput< ObservationScalarType
     //! Populated via setInterArcContinuityDiscrepancyHistory; see comment above for rationale.
     std::vector< std::vector< Eigen::VectorXd > > interArcContinuityDiscrepancyHistory_;
 
+    //! Least-squares cost per iteration
+    std::vector< EstimationCost > costHistory_;
+
     //    //! List of numerical solutions of dynamics (per iteration, per arc)
     //    std::vector< std::vector< std::map< TimeType, Eigen::Matrix< ObservationScalarType, Eigen::Dynamic, 1 > > > >
     //    dynamicsHistoryPerIteration_;
@@ -1334,7 +1379,8 @@ protected:
                 ( residualHistory_ == rhs.residualHistory_ ) && ( parameterHistory_ == rhs.parameterHistory_ ) &&
                 ( exceptionDuringInversion_ == rhs.exceptionDuringInversion_ ) && ( numberOfParameters_ == rhs.numberOfParameters_ ) &&
                 ( interArcContinuityCostHistory_ == rhs.interArcContinuityCostHistory_ ) &&
-                ( interArcContinuityDiscrepancyHistory_ == rhs.interArcContinuityDiscrepancyHistory_ );
+                ( interArcContinuityDiscrepancyHistory_ == rhs.interArcContinuityDiscrepancyHistory_ ) &&
+                ( costHistory_ == rhs.costHistory_ );
     }
 
 private:
@@ -1356,6 +1402,7 @@ private:
         ar( CEREAL_NVP( simulationResultsPerIteration_ ) );
         ar( CEREAL_NVP( interArcContinuityCostHistory_ ) );
         ar( CEREAL_NVP( interArcContinuityDiscrepancyHistory_ ) );
+        ar( CEREAL_NVP( costHistory_ ) );
     }
 
     template< class Archive >
@@ -1374,6 +1421,7 @@ private:
         ar( CEREAL_NVP( simulationResultsPerIteration_ ) );
         ar( CEREAL_NVP( interArcContinuityCostHistory_ ) );
         ar( CEREAL_NVP( interArcContinuityDiscrepancyHistory_ ) );
+        ar( CEREAL_NVP( costHistory_ ) );
     }
 };
 

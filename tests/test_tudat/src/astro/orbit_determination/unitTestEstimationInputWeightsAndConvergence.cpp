@@ -628,6 +628,7 @@ BOOST_AUTO_TEST_CASE( test_CostFunctionBasedBestIterationSelection )
                 orbitDeterminationManager.estimateParameters( estimationInput );
 
         BOOST_CHECK( estimationOutput->residualHistory_.size( ) >= 2 );
+        BOOST_REQUIRE_EQUAL( estimationOutput->getCostHistory( ).size( ), estimationOutput->residualHistory_.size( ) );
         BOOST_CHECK( estimationOutput->bestIteration_ >= 0 );
         BOOST_CHECK( estimationOutput->bestIteration_ < static_cast< int >( estimationOutput->residualHistory_.size( ) ) );
 
@@ -646,6 +647,7 @@ BOOST_AUTO_TEST_CASE( test_CostFunctionBasedBestIterationSelection )
             const double currentCost =
                     linear_algebra::computeLeastSquaresCostFunction( weights, estimationOutput->residualHistory_.at( i ) );
             const double currentRms = linear_algebra::getVectorEntryRootMeanSquare( estimationOutput->residualHistory_.at( i ) );
+            BOOST_CHECK_CLOSE_FRACTION( estimationOutput->getCostHistory( ).at( i ).getTotalCost( ), currentCost, 1.0E-14 );
             costHistory.push_back( currentCost );
             rmsHistory.push_back( currentRms );
 

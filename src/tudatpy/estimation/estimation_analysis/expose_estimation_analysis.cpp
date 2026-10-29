@@ -931,6 +931,54 @@ void expose_estimation_analysis( py::module& m )
                     TUDATPY_DEF_PICKLE( tss::CovarianceAnalysisOutput< STATE_SCALAR_TYPE, TIME_TYPE > )
                             TUDATPY_DEF_EQ_NE( tss::CovarianceAnalysisOutput< STATE_SCALAR_TYPE, TIME_TYPE > );
 
+    py::class_< tss::EstimationCost >( m,
+                                       "EstimationCost",
+                                       R"doc(
+
+         Least-squares cost of one estimation iteration, split into its parts.
+
+      )doc" )
+            .def_readonly( "observation_cost",
+                           &tss::EstimationCost::observationCost,
+                           R"doc(
+
+         **read-only**
+
+         Weighted observation residual cost, :math:`\frac{1}{2}\mathbf{r}^{T}\mathbf{W}\mathbf{r}`.
+
+         :type: float
+      )doc" )
+            .def_readonly( "a_priori_cost",
+                           &tss::EstimationCost::aprioriCost,
+                           R"doc(
+
+         **read-only**
+
+         Cost of the deviation from the a priori parameters. Zero unless ``apply_apriori_parameter_deviation`` is used.
+
+         :type: float
+      )doc" )
+            .def_readonly( "inter_arc_continuity_cost",
+                           &tss::EstimationCost::interArcContinuityCost,
+                           R"doc(
+
+         **read-only**
+
+         Cost of the soft inter-arc continuity constraints. Zero if there are none.
+
+         :type: float
+      )doc" )
+            .def_property_readonly( "total_cost",
+                                    &tss::EstimationCost::getTotalCost,
+                                    R"doc(
+
+         **read-only**
+
+         Sum of all parts, which is used to select the best iteration.
+
+         :type: float
+      )doc" );
+
     py::class_< tss::EstimationOutput< STATE_SCALAR_TYPE, TIME_TYPE >,
                 std::shared_ptr< tss::EstimationOutput< STATE_SCALAR_TYPE, TIME_TYPE > >,
                 tss::CovarianceAnalysisOutput< STATE_SCALAR_TYPE, TIME_TYPE > >( m,
@@ -1027,6 +1075,16 @@ void expose_estimation_analysis( py::module& m )
 
          :type: int
 
+      )doc" )
+            .def_property_readonly( "cost_history",
+                                    &tss::EstimationOutput< STATE_SCALAR_TYPE, TIME_TYPE >::getCostHistory,
+                                    R"doc(
+
+         **read-only**
+
+         Least-squares cost per iteration. The best iteration is the one with the lowest total cost.
+
+         :type: list[EstimationCost]
       )doc" )
             .def_property_readonly( "inter_arc_continuity_cost_history",
                                     &tss::EstimationOutput< STATE_SCALAR_TYPE, TIME_TYPE >::getInterArcContinuityCostHistory,

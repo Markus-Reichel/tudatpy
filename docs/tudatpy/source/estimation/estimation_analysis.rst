@@ -94,6 +94,8 @@ Classes
 
    NormalEquationsSolverSettings
 
+   EstimationCost
+
    InterArcStateContinuityConstraintSettings
 
 
@@ -127,6 +129,9 @@ Classes
    :members:
 
 .. autoclass:: tudatpy.estimation.estimation_analysis.NormalEquationsSolverSettings
+   :members:
+
+.. autoclass:: tudatpy.estimation.estimation_analysis.EstimationCost
    :members:
 
 .. autoclass:: tudatpy.estimation.estimation_analysis.InterArcStateContinuityConstraintSettings

@@ -126,7 +126,7 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performEsti
 
     // Declare residual bookkeeping variables
     std::vector< double > rmsResidualHistory;
-    std::vector< double > costFunctionHistory;
+    std::vector< EstimationCost > costHistory;
     double residualRms;
     std::map< observation_models::ObservableType, double > residualRmsPerType;
     double costFunction;
@@ -296,19 +296,22 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performEsti
 
         // Calculate mean residual for current iteration.
         residualRms = linear_algebra::getVectorEntryRootMeanSquare( residuals.template cast< double >( ) );
-        costFunction = linear_algebra::computeLeastSquaresCostFunction( weightsMatrixDiagonals, residuals.template cast< double >( ) );
-        double aprioriCost = 0.0;
+        EstimationCost cost;
+        cost.observationCost =
+                linear_algebra::computeLeastSquaresCostFunction( weightsMatrixDiagonals, residuals.template cast< double >( ) );
         if( estimationInput->getApplyAprioriParameterDeviation( ) )
         {
-            aprioriCost = 0.5 *
+            cost.aprioriCost = 0.5 *
                     normalizedAprioriParameterDeviation.dot( normalizedInverseAprioriCovarianceMatrix *
                                                              normalizedAprioriParameterDeviation );
         }
+        cost.interArcContinuityCost = interArcContribution.totalConstraintCost;
+
         // In deviation-based mode, best-iteration selection additionally includes the absolute a priori cost. Residual RMS
         // is unchanged so observation-only diagnostics remain meaningful.
-        costFunction += aprioriCost + interArcContribution.totalConstraintCost;
+        costFunction = cost.getTotalCost( );
         rmsResidualHistory.push_back( residualRms );
-        costFunctionHistory.push_back( costFunction );
+        costHistory.push_back( cost );
 
         if( estimationInput->getSaveResidualsAndParametersFromEachIteration( ) )
         {
@@ -443,6 +446,7 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performEsti
     {
         estimationOutput->setSimulationResults( simulationResultsPerIteration );
     }
+    estimationOutput->setCostHistory( costHistory );
     if( !interArcConstraints.empty( ) )
     {
         estimationOutput->setInterArcContinuityCostHistory( interArcContinuityCostHistory );

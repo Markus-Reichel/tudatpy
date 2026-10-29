@@ -123,6 +123,8 @@ std::shared_ptr< simulation_setup::EstimationOutput< double, TimeType > > create
                                                                                               73.0,
                                                                                               interArcContinuityDiscrepancies );
     output->setInterArcContinuityCostHistory( { 74.0, 75.0 } );
+    output->setCostHistory(
+            { simulation_setup::EstimationCost{ 80.0, 81.0, 82.0 }, simulation_setup::EstimationCost{ 83.0, 84.0, 85.0 } } );
     output->setInterArcContinuityDiscrepancyHistory(
             { { ( Eigen::Vector2d( ) << 76.0, 77.0 ).finished( ) }, { ( Eigen::Vector2d( ) << 78.0, 79.0 ).finished( ) } } );
     return output;

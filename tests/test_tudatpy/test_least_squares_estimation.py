@@ -10,10 +10,10 @@ from tudatpy.estimation.observations_setup import (
 from tudatpy.interface import spice
 
 
-def test_cholesky_solver_matches_default():
-    """Check that an estimation with the Cholesky solver gives the same estimate and covariance as the default solver."""
+def _create_estimation():
+    """Create an Earth orbiter with degree and order 2 gravity, observed through its position, and a function that
+    estimates its initial state from a perturbed value with a given solver."""
 
-    # Earth orbiter with degree and order 2 gravity, observed through its position
     spice.load_standard_kernels()
     bodies = environment_setup.create_system_of_bodies(
         environment_setup.get_default_body_settings(["Earth"], "Earth", "J2000")
@@ -58,7 +58,6 @@ def test_cholesky_solver_matches_default():
         bodies,
     )
 
-    # Estimate from the same perturbed initial state with the given solver
     def estimate(solver_settings):
         parameter_set.parameter_vector = initial_state + np.array(
             [100.0, 100.0, 100.0, 0.1, 0.1, 0.1]
@@ -68,10 +67,18 @@ def test_cholesky_solver_matches_default():
         )
         estimation_input.define_estimation_settings(print_output_to_terminal=False)
         estimation_input.normal_equations_solver_settings = solver_settings
-        return estimator.perform_estimation(estimation_input)
+        return estimation_input, estimator.perform_estimation(estimation_input)
 
-    reference = estimate(None)
-    cholesky = estimate(estimation_analysis.cholesky_solver())
+    return estimate
+
+
+def test_cholesky_solver_matches_default():
+    """Check that an estimation with the Cholesky solver gives the same estimate and covariance as the default solver."""
+
+    estimate = _create_estimation()
+    _, reference = estimate(None)
+    _, cholesky = estimate(estimation_analysis.cholesky_solver())
+
     # Compare the estimates relative to their formal errors, since some state components are zero
     estimate_difference = (
         cholesky.final_parameters - reference.final_parameters
@@ -79,3 +86,15 @@ def test_cholesky_solver_matches_default():
     assert np.max(np.abs(estimate_difference)) < 1.0e-6
     assert np.allclose(cholesky.formal_errors, reference.formal_errors, rtol=1.0e-8, atol=0.0)
     assert np.allclose(cholesky.correlations, reference.correlations, rtol=0.0, atol=1.0e-8)
+
+
+def test_cost_history():
+    """Check that the reported cost of the best iteration is half the weighted sum of squared final residuals."""
+
+    estimation_input, output = _create_estimation()(None)
+    weights = estimation_input.weight_matrix_diagonal
+    expected_cost = 0.5 * np.sum(weights * output.final_residuals**2)
+    best_cost = output.cost_history[output.best_iteration]
+    assert np.isclose(best_cost.observation_cost, expected_cost, rtol=1.0e-12, atol=0.0)
+    assert best_cost.total_cost == best_cost.observation_cost
+    assert min(cost.total_cost for cost in output.cost_history) == best_cost.total_cost
