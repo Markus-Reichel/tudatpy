@@ -15,7 +15,6 @@
 #ifndef TUDAT_LEASTSQUARESTRAITS_H
 #define TUDAT_LEASTSQUARESTRAITS_H
 
-#include <iostream>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -23,8 +22,6 @@
 
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
-#include <Eigen/SparseQR>
-#include <Eigen/SVD>
 
 namespace tudat
 {
@@ -39,13 +36,6 @@ struct Dense : public StorageClass {
 struct Sparse : public StorageClass {
 };
 
-struct SolverClass {
-};
-struct SVD : public SolverClass {
-};
-struct QR : public SolverClass {
-};
-
 /*! Traits class generalizing over different possible matrix representations.
  * Mainly used to control whether operations are performed on Dense or Sparse
  * matrices, but can also be used to switch to single precision.
@@ -54,13 +44,7 @@ template< typename Real, typename Storage >
 struct MatrixTraits {
 };
 
-/*! Traits class generalizing over different solvers implemented in Eigen.
- */
-template< typename Matrix, typename Solver >
-struct SolverTraits {
-};
-
-/*! Convenience traits class to get `MatrixTraits` and `SolverTraits` defaults from an Eigen matrix type.
+/*! Convenience traits class to get the `MatrixTraits` of an Eigen matrix type.
  */
 template< typename E >
 struct from_eigen {
@@ -71,7 +55,6 @@ struct from_eigen< Eigen::Matrix< T, Eigen::Dynamic, Eigen::Dynamic > > {
     using traits = MatrixTraits< T, Dense >;
     using value_type = T;
     using dense_vector_type = Eigen::Matrix< T, Eigen::Dynamic, 1 >;
-    using solver = SVD;
 };
 
 template< typename T >
@@ -79,7 +62,6 @@ struct from_eigen< Eigen::SparseMatrix< T > > {
     using traits = MatrixTraits< T, Sparse >;
     using value_type = T;
     using dense_vector_type = Eigen::Matrix< T, Eigen::Dynamic, 1 >;
-    using solver = QR;
 };
 
 template< typename Real >
@@ -363,53 +345,6 @@ struct MatrixTraits< Real, Sparse > {
         matrix_type result( rows, cols );
         result.setFromTriplets( r.begin( ), r.end( ) );
         return result;
-    }
-};
-
-/*! Solver traits for dense matrices, using a singular value decomposition.
- *
- * Emits a warning on stdout when the condition number exceeds `limitConditionNumberForWarning`.
- * A NaN limit disables the check.
- */
-template< typename Real >
-struct SolverTraits< Eigen::Matrix< Real, Eigen::Dynamic, Eigen::Dynamic >, SVD > {
-    using matrix_type = Eigen::Matrix< Real, Eigen::Dynamic, Eigen::Dynamic >;
-    using vector_type = Eigen::Matrix< Real, Eigen::Dynamic, 1 >;
-
-    static vector_type solve( const matrix_type& A, const vector_type& b, Real limitConditionNumberForWarning )
-    {
-        auto svd = A.template jacobiSvd< Eigen::ComputeThinU | Eigen::ComputeThinV >( );
-        if( limitConditionNumberForWarning == limitConditionNumberForWarning )
-        {
-            const vector_type& singularValues = svd.singularValues( );
-            Real conditionNumber = singularValues( 0 ) / singularValues( singularValues.rows( ) - 1 );
-            if( conditionNumber > limitConditionNumberForWarning )
-            {
-                std::cerr << "Warning when performing least squares, condition number is " << conditionNumber << std::endl;
-            }
-        }
-        return svd.solve( b );
-    }
-};
-
-/*! Solver traits for sparse matrices, using a sparse QR decomposition.
- *
- * Eigen's sparse QR does not provide a condition number estimate, so the limit is ignored.
- */
-template< typename Real >
-struct SolverTraits< Eigen::SparseMatrix< Real >, QR > {
-    using matrix_type = Eigen::SparseMatrix< Real >;
-    using vector_type = Eigen::Matrix< Real, Eigen::Dynamic, 1 >;
-
-    static vector_type solve( const matrix_type& A, const vector_type& b, Real /* limitConditionNumberForWarning */ )
-    {
-        Eigen::SparseQR< matrix_type, Eigen::COLAMDOrdering< int > > qr;
-        qr.compute( A );
-        if( qr.info( ) != Eigen::Success )
-        {
-            throw std::runtime_error( "Error when solving sparse least-squares system: sparse QR decomposition failed" );
-        }
-        return qr.solve( b );
     }
 };
 

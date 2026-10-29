@@ -705,6 +705,7 @@ BOOST_AUTO_TEST_CASE( test_EstimationAndCovariance_WithInterArcContinuity )
                                                                     Eigen::VectorXd::Ones( 1 ),
                                                                     Eigen::VectorXd::Ones( 1 ),
                                                                     Eigen::MatrixXd::Identity( 1, 1 ),
+                                                                    Eigen::MatrixXd::Identity( 1, 1 ),
                                                                     Eigen::MatrixXd::Zero( 0, 0 ),
                                                                     Eigen::VectorXd::Zero( 0 ),
                                                                     Eigen::MatrixXd::Zero( 0, 0 ),

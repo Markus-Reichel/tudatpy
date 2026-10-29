@@ -345,9 +345,12 @@ BOOST_AUTO_TEST_CASE( test_LinearConstraintInEarthSatelliteEstimation )
     const std::vector< std::shared_ptr< estimatable_parameters::EstimatableParameter< Eigen::VectorXd > > > initialStateParameters = {
         constrainedInitialState
     };
+    // The gravitational parameter of the Moon is a consider parameter
+    const std::shared_ptr< estimatable_parameters::EstimatableParameterSet< double > > considerParameters =
+            createParametersToEstimate< double, double >( { estimatable_parameters::gravitationalParameter( "Moon" ) }, bodies );
     const std::shared_ptr< estimatable_parameters::EstimatableParameterSet< double > > parametersToEstimate =
             std::make_shared< estimatable_parameters::EstimatableParameterSet< double > >(
-                    scalarParameters, vectorParameters, initialStateParameters );
+                    scalarParameters, vectorParameters, initialStateParameters, considerParameters );
 
     LinkEnds linkEnds;
     linkEnds[ observed_body ] = LinkEndId( "Satellite", "" );
@@ -375,8 +378,10 @@ BOOST_AUTO_TEST_CASE( test_LinearConstraintInEarthSatelliteEstimation )
     const Eigen::Vector6d perturbedInitialState = trueInitialState + initialStatePerturbation;
     orbitDeterminationManager.resetParameterEstimate( perturbedInitialState, true );
 
+    const Eigen::MatrixXd considerCovariance =
+            Eigen::MatrixXd::Constant( 1, 1, std::pow( 1.0E-3 * considerParameters->getFullParameterValues< double >( )( 0 ), 2 ) );
     const std::shared_ptr< EstimationInput< double, double > > estimationInput = std::make_shared< EstimationInput< double, double > >(
-            simulatedObservations, Eigen::MatrixXd::Zero( 0, 0 ), estimationConvergenceChecker( 4, 0.0, 0.0, 100 ) );
+            simulatedObservations, Eigen::MatrixXd::Zero( 0, 0 ), estimationConvergenceChecker( 4, 0.0, 0.0, 100 ), considerCovariance );
     estimationInput->defineEstimationSettings( true, true, true, true, true );
 
     const std::shared_ptr< EstimationOutput< double, double > > estimationOutput =
@@ -403,6 +408,15 @@ BOOST_AUTO_TEST_CASE( test_LinearConstraintInEarthSatelliteEstimation )
 
     const Eigen::Vector6d totalStateCorrection = initialStateHistory.col( initialStateHistory.cols( ) - 1 ) - initialStateHistory.col( 0 );
     BOOST_CHECK_SMALL( totalStateCorrection( 0 ) + 1000.0 * totalStateCorrection( 4 ), 1.0E-7 );
+
+    // Consider contribution (P H^T W H_c) C (P H^T W H_c)^T, with P the parameter block of the constrained covariance
+    const Eigen::MatrixXd parameterCovariance = estimationOutput->getUnnormalizedCovarianceMatrix( ).topLeftCorner( 6, 6 );
+    const Eigen::MatrixXd covarianceTimesConsiderNormalMatrix = parameterCovariance *
+            estimationOutput->getUnnormalizedDesignMatrix( ).transpose( ) * estimationInput->getWeightsMatrixDiagonals( ).asDiagonal( ) *
+            estimationOutput->getUnnormalizedDesignMatrixConsiderParameters( );
+    const Eigen::MatrixXd expectedConsiderContribution =
+            covarianceTimesConsiderNormalMatrix * considerCovariance * covarianceTimesConsiderNormalMatrix.transpose( );
+    BOOST_CHECK( estimationOutput->getConsiderCovarianceContribution( ).isApprox( expectedConsiderContribution, 1.0E-8 ) );
 }
 
 //! This test checks whether the input/output of the estimation (weights, a priori covariance, unscaled covariance) are
@@ -512,6 +526,111 @@ BOOST_AUTO_TEST_CASE( test_EstimationInputAndOutput )
                 BOOST_CHECK_SMALL( tightConstraintInverseCovariance( i, j ) / tightConstraintInverseCovariance( i, i ), 1.0E-10 );
             }
         }
+    }
+}
+
+//! Test that every solver of the normal equations, with a dense and a sparse design matrix, gives the same estimate and
+//! covariance as the default Jacobi SVD
+BOOST_AUTO_TEST_CASE( testSolverChoiceInEstimation )
+{
+    using namespace observation_models;
+    using namespace orbital_element_conversions;
+
+    spice_interface::loadStandardSpiceKernels( );
+
+    const double initialTime = 1.0E7;
+    const double finalTime = initialTime + 3.0 * 3600.0;
+
+    // Earth orbiter with degree and order 2 gravity, observed through its position
+    BodyListSettings bodySettings = getDefaultBodySettings( { "Earth" }, "Earth", "ECLIPJ2000" );
+    SystemOfBodies bodies = createSystemOfBodies( bodySettings );
+    bodies.createEmptyBody( "Satellite" );
+
+    SelectedAccelerationMap accelerationSettings;
+    accelerationSettings[ "Satellite" ][ "Earth" ].push_back( std::make_shared< SphericalHarmonicAccelerationSettings >( 2, 2 ) );
+    const std::vector< std::string > bodiesToPropagate = { "Satellite" };
+    const std::vector< std::string > centralBodies = { "Earth" };
+    const AccelerationMap accelerationModels =
+            createAccelerationModelsMap( bodies, accelerationSettings, bodiesToPropagate, centralBodies );
+
+    Eigen::Vector6d initialKeplerianState;
+    initialKeplerianState << 7200.0E3, 0.01, unit_conversions::convertDegreesToRadians( 55.0 ),
+            unit_conversions::convertDegreesToRadians( 40.0 ), unit_conversions::convertDegreesToRadians( 20.0 ),
+            unit_conversions::convertDegreesToRadians( 10.0 );
+    const Eigen::Vector6d trueInitialState = convertKeplerianToCartesianElements(
+            initialKeplerianState, bodies.at( "Earth" )->getGravityFieldModel( )->getGravitationalParameter( ) );
+    const std::shared_ptr< TranslationalStatePropagatorSettings< double, double > > propagatorSettings =
+            std::make_shared< TranslationalStatePropagatorSettings< double, double > >(
+                    centralBodies,
+                    accelerationModels,
+                    bodiesToPropagate,
+                    trueInitialState,
+                    initialTime,
+                    rungeKuttaFixedStepSettings( 60.0, CoefficientSets::rungeKuttaFehlberg78 ),
+                    propagationTimeTerminationSettings( finalTime ),
+                    cowell );
+
+    // Estimate the initial state and the gravitational parameter of the Earth
+    std::vector< std::shared_ptr< EstimatableParameterSettings > > parameterSettings =
+            getInitialStateParameterSettings< double, double >( propagatorSettings, bodies );
+    parameterSettings.push_back( estimatable_parameters::gravitationalParameter( "Earth" ) );
+    const std::shared_ptr< estimatable_parameters::EstimatableParameterSet< double > > parametersToEstimate =
+            createParametersToEstimate< double, double >( parameterSettings, bodies, propagatorSettings );
+
+    LinkEnds linkEnds;
+    linkEnds[ observed_body ] = LinkEndId( "Satellite", "" );
+    OrbitDeterminationManager< double, double > orbitDeterminationManager(
+            bodies,
+            parametersToEstimate,
+            { std::make_shared< ObservationModelSettings >( position_observable, linkEnds ) },
+            propagatorSettings );
+
+    std::vector< double > observationTimes;
+    for( double observationTime = initialTime; observationTime <= finalTime; observationTime += 300.0 )
+    {
+        observationTimes.push_back( observationTime );
+    }
+    const std::shared_ptr< ObservationCollection< double, double > > simulatedObservations =
+            simulateObservations< double, double >( { std::make_shared< TabulatedObservationSimulationSettings< double > >(
+                                                            position_observable, linkEnds, observationTimes, observed_body ) },
+                                                    orbitDeterminationManager.getObservationSimulators( ),
+                                                    bodies );
+
+    const Eigen::VectorXd trueParameters = parametersToEstimate->getFullParameterValues< double >( );
+    Eigen::VectorXd perturbedParameters = trueParameters;
+    perturbedParameters.segment( 0, 3 ).array( ) += 100.0;
+    perturbedParameters.segment( 3, 3 ).array( ) += 0.1;
+    perturbedParameters( 6 ) *= 1.0 + 1.0E-7;
+
+    // Run the estimation from the same perturbed parameters with the given solver and storage
+    auto estimate = [ & ]( const std::shared_ptr< linear_algebra::NormalEquationsSolverSettings >& solverSettings,
+                           const bool useSparseDesignMatrix ) {
+        orbitDeterminationManager.resetParameterEstimate( perturbedParameters, true );
+        auto estimationInput = std::make_shared< EstimationInput< double, double > >(
+                simulatedObservations, Eigen::MatrixXd::Zero( 0, 0 ), estimationConvergenceChecker( 3, 0.0, 0.0, 100 ) );
+        estimationInput->defineEstimationSettings( true, true, true, false, false );
+        estimationInput->setSparseDesignMatrix( useSparseDesignMatrix );
+        estimationInput->setNormalEquationsSolverSettings( solverSettings );
+        auto estimationOutput = orbitDeterminationManager.estimateParameters( estimationInput );
+        BOOST_REQUIRE( !estimationOutput->exceptionDuringInversion_ );
+        return estimationOutput;
+    };
+
+    const auto referenceOutput = estimate( nullptr, false );
+    BOOST_CHECK( ( referenceOutput->parameterEstimate_ - trueParameters ).cwiseQuotient( trueParameters ).cwiseAbs( ).maxCoeff( ) <
+                 1.0E-10 );
+
+    const std::vector< std::pair< std::shared_ptr< linear_algebra::NormalEquationsSolverSettings >, bool > > solverCases = {
+        { linear_algebra::bdcSvdSolver( ), false },
+        { linear_algebra::choleskySolver( ), false },
+        { nullptr, true },
+        { linear_algebra::sparseCholeskySolver( ), true }
+    };
+    for( const auto& solverCase : solverCases )
+    {
+        const auto output = estimate( solverCase.first, solverCase.second );
+        BOOST_CHECK( output->parameterEstimate_.isApprox( referenceOutput->parameterEstimate_, 1.0E-12 ) );
+        BOOST_CHECK( output->getUnnormalizedCovarianceMatrix( ).isApprox( referenceOutput->getUnnormalizedCovarianceMatrix( ), 1.0E-8 ) );
     }
 }
 

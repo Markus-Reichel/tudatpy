@@ -22,7 +22,6 @@
 #include <variant>
 
 #include <Eigen/Core>
-#include <Eigen/LU>
 #include <Eigen/SparseCore>
 
 #include <cereal/cereal.hpp>
@@ -34,6 +33,7 @@
 
 #include "tudat/basics/timeType.h"
 #include "tudat/math/basic/leastSquaresTraits.h"
+#include "tudat/math/basic/normalEquationsSolver.h"
 #include "tudat/astro/observation_models/linkTypeDefs.h"
 #include "tudat/astro/observation_models/observableTypes.h"
 #include "tudat/simulation/estimation_setup/interArcStateContinuityConstraintSettings.h"
@@ -215,6 +215,18 @@ public:
         useSparseDesignMatrix_ = s;
     }
 
+    //! Function to get the settings of the solver of the normal equations (nullptr for the default of the matrix storage)
+    std::shared_ptr< linear_algebra::NormalEquationsSolverSettings > getNormalEquationsSolverSettings( ) const
+    {
+        return normalEquationsSolverSettings_;
+    }
+
+    //! Function to set the settings of the solver of the normal equations (nullptr for the default of the matrix storage)
+    void setNormalEquationsSolverSettings( const std::shared_ptr< linear_algebra::NormalEquationsSolverSettings >& solverSettings )
+    {
+        normalEquationsSolverSettings_ = solverSettings;
+    }
+
     //! Configure soft inter-arc translational state continuity priors.
     /*!
      * Configure soft inter-arc translational state continuity priors for covariance analysis and estimation.
@@ -267,6 +279,9 @@ protected:
 
     //! Boolean denoting whether to use a sparse design matrix
     bool useSparseDesignMatrix_;
+
+    //! Settings of the solver of the normal equations (nullptr for the default of the matrix storage)
+    std::shared_ptr< linear_algebra::NormalEquationsSolverSettings > normalEquationsSolverSettings_;
 
     //! Soft inter-arc translational state continuity priors. Empty by default (feature off).
     std::vector< std::shared_ptr< InterArcStateContinuityConstraintSettings > > interArcContinuityConstraints_;
@@ -592,6 +607,7 @@ struct CovarianceAnalysisOutput {
                               const Eigen::VectorXd& weightsMatrixDiagonal,
                               const Eigen::VectorXd& designMatrixTransformationDiagonal,
                               const Eigen::MatrixXd& inverseNormalizedCovarianceMatrix,
+                              const Eigen::MatrixXd& normalizedCovarianceMatrix,
                               const Eigen::MatrixXd& normalizedDesignMatrixConsiderParameters = Eigen::MatrixXd::Zero( 0, 0 ),
                               const Eigen::VectorXd& considerNormalizationFactors = Eigen::VectorXd::Zero( 0 ),
                               const Eigen::MatrixXd& considerCovarianceContribution = Eigen::MatrixXd::Zero( 0, 0 ),
@@ -601,7 +617,7 @@ struct CovarianceAnalysisOutput {
                               const std::vector< Eigen::VectorXd >& interArcContinuityDiscrepancies = std::vector< Eigen::VectorXd >( ) ):
         normalizedDesignMatrix_( normalizedDesignMatrix ), weightsMatrixDiagonal_( weightsMatrixDiagonal ),
         designMatrixTransformationDiagonal_( designMatrixTransformationDiagonal ),
-        inverseNormalizedCovarianceMatrix_( inverseNormalizedCovarianceMatrix ),
+        inverseNormalizedCovarianceMatrix_( inverseNormalizedCovarianceMatrix ), normalizedCovarianceMatrix_( normalizedCovarianceMatrix ),
         normalizedDesignMatrixConsiderParameters_( normalizedDesignMatrixConsiderParameters ),
         considerNormalizationFactors_( considerNormalizationFactors ), considerCovariance_( considerCovariance ),
         interArcContinuityCost_( interArcContinuityCost ), interArcContinuityDiscrepancies_( interArcContinuityDiscrepancies ),
@@ -627,9 +643,6 @@ struct CovarianceAnalysisOutput {
             considerParametersIncluded_ = true;
         }
 
-        // Compute normalized covariance matrix
-        normalizedCovarianceMatrix_ = inverseNormalizedCovarianceMatrix_.inverse( );
-
         // Compute unnormalised inverse covariance matrix
         inverseUnnormalizedCovarianceMatrix_ = normaliseUnnormaliseInverseCovarianceMatrix(
                 inverseNormalizedCovarianceMatrix_, designMatrixTransformationDiagonal_, false );
@@ -645,7 +658,9 @@ struct CovarianceAnalysisOutput {
         if( considerParametersIncluded_ )
         {
             // Add contribution consider parameters to unnormalised covariance
-            normalizedCovarianceWithConsiderParameters_ += considerCovarianceContribution;
+            // With linear constraints, the covariance also has rows for the constraints, so only its parameter block is updated
+            normalizedCovarianceWithConsiderParameters_.topLeftCorner(
+                    considerCovarianceContribution.rows( ), considerCovarianceContribution.cols( ) ) += considerCovarianceContribution;
 
             // Compute unnormalised covariance with consider parameters
             unnormalizedCovarianceWithConsiderParameters_ = normaliseUnnormaliseCovarianceMatrix(
@@ -1084,6 +1099,7 @@ struct EstimationOutput : public CovarianceAnalysisOutput< ObservationScalarType
      * \param designMatrixTransformationDiagonal Vector of values by which the columns of the unnormalized information
      * matrix were divided to normalize its entries.
      * \param inverseNormalizedCovarianceMatrix Inverse of postfit normalized covariance matrix
+     * \param normalizedCovarianceMatrix Postfit normalized covariance matrix, from the same solver as the estimate
      * \param residualStandardDeviation Standard deviation of postfit residuals vector
      * \param residualHistory Vector of residuals per iteration
      * \param parameterHistory Vector of parameter vectors per iteration (entry 1 is pre-estimation values)
@@ -1099,6 +1115,7 @@ struct EstimationOutput : public CovarianceAnalysisOutput< ObservationScalarType
                       const Eigen::VectorXd& weightsMatrixDiagonal,
                       const Eigen::VectorXd& designMatrixTransformationDiagonal,
                       const Eigen::MatrixXd& inverseNormalizedCovarianceMatrix,
+                      const Eigen::MatrixXd& normalizedCovarianceMatrix,
                       const double residualStandardDeviation,
                       const int bestIteration,
                       const std::vector< Eigen::VectorXd >& residualHistory = std::vector< Eigen::VectorXd >( ),
@@ -1116,6 +1133,7 @@ struct EstimationOutput : public CovarianceAnalysisOutput< ObservationScalarType
                                                                      weightsMatrixDiagonal,
                                                                      designMatrixTransformationDiagonal,
                                                                      inverseNormalizedCovarianceMatrix,
+                                                                     normalizedCovarianceMatrix,
                                                                      normalizedDesignMatrixConsiderParameters,
                                                                      considerNormalizationFactors,
                                                                      covarianceConsiderContribution,

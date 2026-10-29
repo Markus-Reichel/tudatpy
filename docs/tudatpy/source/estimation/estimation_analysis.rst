@@ -23,6 +23,12 @@ Functions
 
    estimation_convergence_checker
 
+   jacobi_svd_solver
+
+   bdc_svd_solver
+
+   cholesky_solver
+
    create_covariance_from_diagonal_entries
 
    add_covariance_diagonal_entries
@@ -47,6 +53,12 @@ Functions
 .. autofunction:: tudatpy.estimation.estimation_analysis.propagate_formal_errors
 
 .. autofunction:: tudatpy.estimation.estimation_analysis.estimation_convergence_checker
+
+.. autofunction:: tudatpy.estimation.estimation_analysis.jacobi_svd_solver
+
+.. autofunction:: tudatpy.estimation.estimation_analysis.bdc_svd_solver
+
+.. autofunction:: tudatpy.estimation.estimation_analysis.cholesky_solver
 
 .. autofunction:: tudatpy.estimation.estimation_analysis.create_covariance_from_diagonal_entries
 
@@ -80,6 +92,8 @@ Classes
 
    EstimationConvergenceChecker
 
+   NormalEquationsSolverSettings
+
    InterArcStateContinuityConstraintSettings
 
 
@@ -110,6 +124,9 @@ Classes
    :special-members: __init__
 
 .. autoclass:: tudatpy.estimation.estimation_analysis.EstimationConvergenceChecker
+   :members:
+
+.. autoclass:: tudatpy.estimation.estimation_analysis.NormalEquationsSolverSettings
    :members:
 
 .. autoclass:: tudatpy.estimation.estimation_analysis.InterArcStateContinuityConstraintSettings

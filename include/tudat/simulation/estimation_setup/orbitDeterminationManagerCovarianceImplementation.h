@@ -102,6 +102,9 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performCova
     Eigen::VectorXd constraintRightHandSide;
     parametersToEstimate_->getConstraints( constraintStateMultiplier, constraintRightHandSide );
     normalizeLinearConstraints( constraintStateMultiplier, constraintRightHandSide, normalizationTerms );
+    const std::shared_ptr< linear_algebra::NormalEquationsSolver< DesignMatrixType > > normalEquationsSolver =
+            linear_algebra::createNormalEquationsSolver< DesignMatrixType >( estimationInput->getNormalEquationsSolverSettings( ),
+                                                                             constraintStateMultiplier.rows( ) > 0 );
 
     // Compute inverse of updated covariance in the storage of the design matrix (dense or sparse). The other matrices
     // are converted to the same storage, the inverse covariance is returned as a dense matrix.
@@ -140,17 +143,22 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performCova
         }
     }
 
+    // Compute the covariance with the selected solver
+    normalEquationsSolver->factorize( DesignMatrixTraits::from_dense( inverseNormalizedCovariance ),
+                                      estimationInput->getLimitConditionNumberForWarning( ) );
+    const Eigen::MatrixXd normalizedCovariance = normalEquationsSolver->inverse( );
+
     // Compute contribution consider parameters
     Eigen::MatrixXd covarianceContributionConsiderParameters;
     if( considerParametersIncluded_ )
     {
-        Eigen::MatrixXd normalizedCovariance = inverseNormalizedCovariance.inverse( );
-        covarianceContributionConsiderParameters =
-                linear_algebra::calculateConsiderParametersCovarianceContribution( normalizedCovariance,
-                                                                                   designMatrixEstimatedParameters,
-                                                                                   estimationInput->getWeightsMatrixDiagonals( ),
-                                                                                   designMatrixConsiderParameters,
-                                                                                   normalizedConsiderCovariance );
+        // With linear constraints, the covariance also has rows for the constraints, only the parameter block is used
+        covarianceContributionConsiderParameters = linear_algebra::calculateConsiderParametersCovarianceContribution(
+                Eigen::MatrixXd( normalizedCovariance.topLeftCorner( numberEstimatedParameters_, numberEstimatedParameters_ ) ),
+                designMatrixEstimatedParameters,
+                estimationInput->getWeightsMatrixDiagonals( ),
+                designMatrixConsiderParameters,
+                normalizedConsiderCovariance );
     }
     else
     {
@@ -165,6 +173,7 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performCova
                     estimationInput->getWeightsMatrixDiagonals( ),
                     normalizationTerms,
                     inverseNormalizedCovariance,
+                    normalizedCovariance,
                     estimationInput->getSaveDesignMatrix( ) ? designMatrixConsiderParameters : Eigen::MatrixXd::Zero( 0, 0 ),
                     considerNormalizationTerms,
                     covarianceContributionConsiderParameters,

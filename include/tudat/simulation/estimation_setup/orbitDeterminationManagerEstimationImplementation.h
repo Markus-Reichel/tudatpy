@@ -76,6 +76,16 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performEsti
                                   std::to_string( weightsMatrixDiagonals.rows( ) ) + ") is not compatible with number of observations (" +
                                   std::to_string( totalNumberOfObservations ) + ")" );
     }
+    // Create the solver of the normal equations. The solver of the best iteration is kept to compute the covariance.
+    Eigen::MatrixXd constraintStateMultiplier;
+    Eigen::VectorXd constraintRightHandSide;
+    parametersToEstimate_->getConstraints( constraintStateMultiplier, constraintRightHandSide );
+    const bool hasLinearConstraints = constraintStateMultiplier.rows( ) > 0;
+    std::shared_ptr< linear_algebra::NormalEquationsSolver< DesignMatrixType > > normalEquationsSolver =
+            linear_algebra::createNormalEquationsSolver< DesignMatrixType >( estimationInput->getNormalEquationsSolverSettings( ),
+                                                                             hasLinearConstraints );
+    std::shared_ptr< linear_algebra::NormalEquationsSolver< DesignMatrixType > > bestNormalEquationsSolver;
+
     // Declare variables to be returned (i.e. results from best iteration)
     double bestCostFunction = TUDAT_NAN;
     double bestRmsResidual = TUDAT_NAN;
@@ -212,12 +222,15 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performEsti
         }
 
         // Perform least squares calculation for correction to parameter vector.
+        if( normalEquationsSolver == bestNormalEquationsSolver )
+        {
+            normalEquationsSolver = linear_algebra::createNormalEquationsSolver< DesignMatrixType >(
+                    estimationInput->getNormalEquationsSolverSettings( ), hasLinearConstraints );
+        }
         std::pair< Eigen::VectorXd, Eigen::MatrixXd > leastSquaresOutput;
         try
         {
             // Get constraints
-            Eigen::MatrixXd constraintStateMultiplier;
-            Eigen::VectorXd constraintRightHandSide;
             parametersToEstimate_->getConstraints( constraintStateMultiplier, constraintRightHandSide );
             normalizeLinearConstraints( constraintStateMultiplier, constraintRightHandSide, normalizationTerms );
 
@@ -226,15 +239,14 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performEsti
             {
                 conditionNumberCheck = TUDAT_NAN;
             }
-            // Perform LSQ inversion in the storage of the design matrix (dense or sparse). The other matrices are
-            // converted to the same storage, the inverse covariance is returned as a dense matrix.
-            std::pair< Eigen::VectorXd, DesignMatrixType > leastSquaresSolution =
-                    linear_algebra::performLeastSquaresAdjustmentFromDesignMatrix< DesignMatrixType >(
+            // Assemble and solve the normal equations in the storage of the design matrix (dense or sparse). The other
+            // matrices are converted to the same storage, the inverse covariance is returned as a dense matrix.
+            linear_algebra::NormalEquations< DesignMatrixType > normalEquations =
+                    linear_algebra::assembleNormalEquations< DesignMatrixType >(
                             designMatrixEstimatedParameters,
                             residuals.template cast< double >( ),
                             weightsMatrixDiagonals,
                             DesignMatrixTraits::from_dense( normalizedInverseAprioriCovarianceMatrix ),
-                            conditionNumberCheck,
                             DesignMatrixTraits::from_dense( constraintStateMultiplier ),
                             constraintRightHandSide,
                             DesignMatrixTraits::from_dense( designMatrixConsiderParameters ),
@@ -242,8 +254,9 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performEsti
                             DesignMatrixTraits::from_dense( interArcContribution.additionalNormalMatrix ),
                             interArcContribution.additionalRightHandSide,
                             normalizedAprioriParameterDeviation );
-            leastSquaresOutput = std::make_pair( std::move( leastSquaresSolution.first ),
-                                                 DesignMatrixTraits::to_dense( std::move( leastSquaresSolution.second ) ) );
+            normalEquationsSolver->factorize( normalEquations.normalMatrix, conditionNumberCheck );
+            leastSquaresOutput = std::make_pair( normalEquationsSolver->solve( normalEquations.rightHandSide ),
+                                                 DesignMatrixTraits::to_dense( std::move( normalEquations.normalMatrix ) ) );
 
             if( constraintStateMultiplier.rows( ) > 0 )
             {
@@ -266,7 +279,9 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performEsti
         Eigen::MatrixXd covarianceContributionConsiderParameters;
         if( considerParametersIncluded_ )
         {
-            Eigen::MatrixXd normalizedCovariance = leastSquaresOutput.second.inverse( );
+            // With linear constraints, the inverse also has rows for the constraints, only the parameter block is used
+            Eigen::MatrixXd normalizedCovariance =
+                    normalEquationsSolver->inverse( ).topLeftCorner( numberEstimatedParameters_, numberEstimatedParameters_ );
             covarianceContributionConsiderParameters =
                     linear_algebra::calculateConsiderParametersCovarianceContribution( normalizedCovariance,
                                                                                        designMatrixEstimatedParameters,
@@ -342,6 +357,7 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performEsti
             bestWeightsMatrixDiagonal = weightsMatrixDiagonals;
             bestTransformationData = std::move( normalizationTerms );
             bestInverseNormalizedCovarianceMatrix = std::move( leastSquaresOutput.second );
+            bestNormalEquationsSolver = normalEquationsSolver;
             bestIteration = numberOfIterations;
             bestConsiderTransformationData = std::move( normalizationTermsConsider );
             bestConsiderCovarianceContribution = covarianceContributionConsiderParameters;
@@ -395,6 +411,12 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performEsti
         std::cout << "Cost function from best iteration: " << bestCostFunction << std::endl;
     }
 
+    // Compute the covariance of the best iteration from its factorization
+    const Eigen::MatrixXd bestNormalizedCovarianceMatrix = ( bestNormalEquationsSolver != nullptr )
+            ? bestNormalEquationsSolver->inverse( )
+            : Eigen::MatrixXd::Constant(
+                      bestInverseNormalizedCovarianceMatrix.rows( ), bestInverseNormalizedCovarianceMatrix.cols( ), TUDAT_NAN );
+
     // Create estimation output object
     std::shared_ptr< EstimationOutput< ObservationScalarType, TimeType > > estimationOutput =
             std::make_shared< EstimationOutput< ObservationScalarType, TimeType > >( bestParameterEstimate,
@@ -403,6 +425,7 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performEsti
                                                                                      bestWeightsMatrixDiagonal,
                                                                                      bestTransformationData,
                                                                                      bestInverseNormalizedCovarianceMatrix,
+                                                                                     bestNormalizedCovarianceMatrix,
                                                                                      bestRmsResidual,
                                                                                      bestIteration,
                                                                                      residualHistory,

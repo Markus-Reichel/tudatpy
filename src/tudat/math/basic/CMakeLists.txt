@@ -49,6 +49,7 @@ set(basic_mathematics_HEADERS
         "mathematicalConstants.h"
         "leastSquaresEstimation.h"
         "leastSquaresPolynomialFit.h"
+        "normalEquationsSolver.h"
         "rotationRepresentations.h"
         "sphericalHarmonicTransformations.h"
         "wignerDMatrices.h"
