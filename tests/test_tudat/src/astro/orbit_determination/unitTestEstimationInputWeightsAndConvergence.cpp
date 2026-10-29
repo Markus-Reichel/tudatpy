@@ -470,6 +470,16 @@ BOOST_AUTO_TEST_CASE( test_WeightDefinitions )
     }
 }
 
+//! Test that the estimation stops once the residual has not improved for the given number of iterations
+BOOST_AUTO_TEST_CASE( testIterationsWithoutImprovement )
+{
+    // Only the criterion on the number of iterations without improvement can stop the estimation here
+    EstimationConvergenceChecker convergenceChecker( 100, -1.0, -1.0, 2 );
+    BOOST_CHECK( !convergenceChecker.isEstimationConverged( 3, { 3.0, 2.0, 1.0 } ) );
+    BOOST_CHECK( !convergenceChecker.isEstimationConverged( 3, { 3.0, 2.0, 2.5 } ) );
+    BOOST_CHECK( convergenceChecker.isEstimationConverged( 4, { 3.0, 2.0, 2.5, 2.1 } ) );
+}
+
 //! Test that best-iteration selection during estimation uses the least-squares cost function
 BOOST_AUTO_TEST_CASE( test_CostFunctionBasedBestIterationSelection )
 {

@@ -327,8 +327,10 @@ public:
             std::cout << "Required residual level achieved" << std::endl;
             isConverged = 1;
         }
-        if( ( std::distance( rmsResidualHistory.begin( ), std::max_element( rmsResidualHistory.begin( ), rmsResidualHistory.end( ) ) ) -
-              rmsResidualHistory.size( ) ) < numberOfIterationsWithoutImprovement_ )
+        // Number of iterations since the lowest residual was reached
+        const std::size_t iterationsWithoutImprovement = rmsResidualHistory.size( ) - 1 -
+                std::distance( rmsResidualHistory.begin( ), std::min_element( rmsResidualHistory.begin( ), rmsResidualHistory.end( ) ) );
+        if( iterationsWithoutImprovement >= numberOfIterationsWithoutImprovement_ )
         {
             std::cout << "Too many iterations without parameter improvement" << std::endl;
             isConverged = 1;
