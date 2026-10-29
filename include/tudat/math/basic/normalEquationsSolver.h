@@ -112,7 +112,7 @@ inline std::shared_ptr< NormalEquationsSolverSettings > bdcSvdSolver( const doub
     return std::make_shared< NormalEquationsSolverSettings >( NormalEquationsSolverType::bdc_svd, relativeSingularValueCutoff );
 }
 
-//! Function to create settings for a Cholesky solver (dense design matrix)
+//! Function to create settings for a Cholesky solver
 inline std::shared_ptr< NormalEquationsSolverSettings > choleskySolver( )
 {
     return std::make_shared< NormalEquationsSolverSettings >( NormalEquationsSolverType::cholesky );
@@ -208,7 +208,16 @@ public:
             }
         }
 
-        decomposition_.compute( normalMatrix );
+        // A dense decomposition of a sparse normal matrix is computed from a dense copy of the normal matrix
+        if constexpr( std::is_same_v< M, Eigen::SparseMatrix< double > > &&
+                      std::is_same_v< typename Decomposition::MatrixType, Eigen::MatrixXd > )
+        {
+            decomposition_.compute( Eigen::MatrixXd( normalMatrix ) );
+        }
+        else
+        {
+            decomposition_.compute( normalMatrix );
+        }
         if( decomposition_.info( ) != Eigen::Success )
         {
             throw std::runtime_error( "Error when solving normal equations, the " + solverName_ + " decomposition failed." );
@@ -291,7 +300,8 @@ private:
 //! Function to create a solver of the normal equations, with a normal matrix of type M (dense or sparse)
 /*!
  * Function to create a solver of the normal equations. Without settings, the default for the matrix storage is used
- * (Jacobi SVD for dense, sparse QR for sparse matrices).
+ * (Jacobi SVD for dense, sparse QR for sparse matrices). The dense solvers (SVD and Cholesky) can also be used with a sparse
+ * matrix, they then factorize a dense copy of the normal matrix. The sparse solvers require a sparse matrix.
  * \param solverSettings Settings of the solver (nullptr for the default)
  * \param hasLinearConstraints Whether the normal equations include linear constraints, which make the normal matrix
  * indefinite so that a Cholesky decomposition cannot be used
@@ -316,38 +326,34 @@ std::shared_ptr< NormalEquationsSolver< M > > createNormalEquationsSolver(
                                   " solver cannot be used with linear constraints, use an SVD or sparse QR solver." );
     }
 
-    if constexpr( isSparse )
+    switch( solverType )
     {
-        switch( solverType )
-        {
-            case NormalEquationsSolverType::sparse_qr:
+        case NormalEquationsSolverType::jacobi_svd:
+            return std::make_shared<
+                    EigenNormalEquationsSolver< M, Eigen::JacobiSVD< Eigen::MatrixXd, Eigen::ComputeThinU | Eigen::ComputeThinV > > >(
+                    solverName, cutoff );
+        case NormalEquationsSolverType::bdc_svd:
+            return std::make_shared<
+                    EigenNormalEquationsSolver< M, Eigen::BDCSVD< Eigen::MatrixXd, Eigen::ComputeThinU | Eigen::ComputeThinV > > >(
+                    solverName, cutoff );
+        case NormalEquationsSolverType::cholesky:
+            return std::make_shared< EigenNormalEquationsSolver< M, Eigen::LLT< Eigen::MatrixXd > > >( solverName, cutoff );
+        case NormalEquationsSolverType::sparse_qr:
+            if constexpr( isSparse )
+            {
                 return std::make_shared< EigenNormalEquationsSolver< M, Eigen::SparseQR< M, Eigen::COLAMDOrdering< int > > > >( solverName,
                                                                                                                                 cutoff );
-            case NormalEquationsSolverType::sparse_cholesky:
+            }
+            break;
+        case NormalEquationsSolverType::sparse_cholesky:
+            if constexpr( isSparse )
+            {
                 return std::make_shared< EigenNormalEquationsSolver< M, Eigen::SimplicialLDLT< M > > >( solverName, cutoff );
-            default:
-                throw std::runtime_error( "Error when creating normal equations solver, the " + solverName +
-                                          " solver requires a dense design matrix." );
-        }
+            }
+            break;
     }
-    else
-    {
-        switch( solverType )
-        {
-            case NormalEquationsSolverType::jacobi_svd:
-                return std::make_shared<
-                        EigenNormalEquationsSolver< M, Eigen::JacobiSVD< M, Eigen::ComputeThinU | Eigen::ComputeThinV > > >( solverName,
-                                                                                                                             cutoff );
-            case NormalEquationsSolverType::bdc_svd:
-                return std::make_shared< EigenNormalEquationsSolver< M, Eigen::BDCSVD< M, Eigen::ComputeThinU | Eigen::ComputeThinV > > >(
-                        solverName, cutoff );
-            case NormalEquationsSolverType::cholesky:
-                return std::make_shared< EigenNormalEquationsSolver< M, Eigen::LLT< M > > >( solverName, cutoff );
-            default:
-                throw std::runtime_error( "Error when creating normal equations solver, the " + solverName +
-                                          " solver requires a sparse design matrix." );
-        }
-    }
+    throw std::runtime_error( "Error when creating normal equations solver, the " + solverName +
+                              " solver requires a sparse design matrix." );
 }
 
 }  // namespace linear_algebra
