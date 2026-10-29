@@ -27,6 +27,12 @@ Functions
 
    simple_outlier_rejection_settings
 
+   jacobi_svd_solver
+
+   bdc_svd_solver
+
+   cholesky_solver
+
    create_covariance_from_diagonal_entries
 
    get_camera_pointing_inverse_apriori_covariance_entries
@@ -67,6 +73,12 @@ Functions
 .. autofunction:: tudatpy.estimation.estimation_analysis.carpino_outlier_rejection_settings
 
 .. autofunction:: tudatpy.estimation.estimation_analysis.simple_outlier_rejection_settings
+
+.. autofunction:: tudatpy.estimation.estimation_analysis.jacobi_svd_solver
+
+.. autofunction:: tudatpy.estimation.estimation_analysis.bdc_svd_solver
+
+.. autofunction:: tudatpy.estimation.estimation_analysis.cholesky_solver
 
 .. autofunction:: tudatpy.estimation.estimation_analysis.create_covariance_from_diagonal_entries
 
@@ -118,6 +130,10 @@ Classes
 
    SimpleOutlierRejectionSettings
 
+   NormalEquationsSolverSettings
+
+   EstimationCost
+
    InterArcStateContinuityConstraintSettings
 
    VarianceComponentSettings
@@ -156,6 +172,12 @@ Classes
    :special-members: __init__
 
 .. autoclass:: tudatpy.estimation.estimation_analysis.EstimationConvergenceChecker
+   :members:
+
+.. autoclass:: tudatpy.estimation.estimation_analysis.NormalEquationsSolverSettings
+   :members:
+
+.. autoclass:: tudatpy.estimation.estimation_analysis.EstimationCost
    :members:
 
 .. autoclass:: tudatpy.estimation.estimation_analysis.InterArcStateContinuityConstraintSettings

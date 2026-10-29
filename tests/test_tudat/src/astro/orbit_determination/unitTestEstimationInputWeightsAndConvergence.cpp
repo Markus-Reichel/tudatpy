@@ -536,6 +536,16 @@ BOOST_AUTO_TEST_CASE( test_ActiveObservationHistory )
     BOOST_CHECK_EQUAL( rejectedPodData.first->residuals_.rows( ), numberOfActiveRowsInBestIteration );
 }
 
+//! Test that the estimation stops once the residual has not improved for the given number of iterations
+BOOST_AUTO_TEST_CASE( testIterationsWithoutImprovement )
+{
+    // Only the criterion on the number of iterations without improvement can stop the estimation here
+    EstimationConvergenceChecker convergenceChecker( 100, -1.0, -1.0, 2 );
+    BOOST_CHECK( !convergenceChecker.isEstimationConverged( 3, { 3.0, 2.0, 1.0 } ) );
+    BOOST_CHECK( !convergenceChecker.isEstimationConverged( 3, { 3.0, 2.0, 2.5 } ) );
+    BOOST_CHECK( convergenceChecker.isEstimationConverged( 4, { 3.0, 2.0, 2.5, 2.1 } ) );
+}
+
 //! Test that best-iteration selection during estimation uses the least-squares cost function
 BOOST_AUTO_TEST_CASE( test_CostFunctionBasedBestIterationSelection )
 {
@@ -696,6 +706,7 @@ BOOST_AUTO_TEST_CASE( test_CostFunctionBasedBestIterationSelection )
         BOOST_CHECK( activeFlags.array( ).all( ) );
 
         BOOST_CHECK( estimationOutput->residualHistory_.size( ) >= 2 );
+        BOOST_REQUIRE_EQUAL( estimationOutput->getCostHistory( ).size( ), estimationOutput->residualHistory_.size( ) );
         BOOST_CHECK( estimationOutput->bestIteration_ >= 0 );
         BOOST_CHECK( estimationOutput->bestIteration_ < static_cast< int >( estimationOutput->residualHistory_.size( ) ) );
 
@@ -714,6 +725,7 @@ BOOST_AUTO_TEST_CASE( test_CostFunctionBasedBestIterationSelection )
             const double currentCost =
                     linear_algebra::computeLeastSquaresCostFunction( weights, estimationOutput->residualHistory_.at( i ) );
             const double currentRms = linear_algebra::getVectorEntryRootMeanSquare( estimationOutput->residualHistory_.at( i ) );
+            BOOST_CHECK_CLOSE_FRACTION( estimationOutput->getCostHistory( ).at( i ).getTotalCost( ), currentCost, 1.0E-14 );
             costHistory.push_back( currentCost );
             rmsHistory.push_back( currentRms );
 

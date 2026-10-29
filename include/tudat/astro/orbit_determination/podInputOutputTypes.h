@@ -11,11 +11,15 @@
 #ifndef TUDAT_PODINPUTOUTPUTTYPES_H
 #define TUDAT_PODINPUTOUTPUTTYPES_H
 
+#include <cstdint>
 #include <map>
 #include <vector>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <variant>
 
 #include <Eigen/Core>
 #include <Eigen/Cholesky>
@@ -23,6 +27,7 @@
 #include <Eigen/SparseCholesky>
 #include <Eigen/SparseCore>
 
+#include <cereal/cereal.hpp>
 #include <cereal/access.hpp>
 #include <cereal/types/base_class.hpp>
 #include <cereal/types/polymorphic.hpp>
@@ -30,6 +35,8 @@
 #include <cereal/types/vector.hpp>
 
 #include "tudat/basics/timeType.h"
+#include "tudat/math/basic/leastSquaresTraits.h"
+#include "tudat/math/basic/normalEquationsSolver.h"
 #include "tudat/astro/observation_models/linkTypeDefs.h"
 #include "tudat/astro/observation_models/observableTypes.h"
 #include "tudat/simulation/estimation_setup/interArcStateContinuityConstraintSettings.h"
@@ -42,6 +49,10 @@ namespace tudat
 
 namespace simulation_setup
 {
+
+using linear_algebra::Dense;
+using linear_algebra::MatrixTraits;
+using linear_algebra::Sparse;
 
 template< typename ObservationScalarType = double, typename TimeType = double >
 class CovarianceAnalysisInput
@@ -65,7 +76,7 @@ public:
         observationCollection_( observationCollection ), observationDataset_( nullptr ),
         inverseOfAprioriCovariance_( inverseOfAprioriCovariance ), considerCovariance_( considerCovariance ),
         limitConditionNumberForWarning_( 1.0E8 ), reintegrateEquationsOnFirstIteration_( true ), reintegrateVariationalEquations_( true ),
-        saveDesignMatrix_( true ), printOutput_( true )
+        saveDesignMatrix_( true ), printOutput_( true ), useSparseDesignMatrix_( false )
     {
         // The base API permits a null collection for configuring input settings.
         // Operations that need observations validate the source when it is used.
@@ -84,7 +95,7 @@ public:
         observationCollection_( nullptr ), observationDataset_( observationDataset ),
         inverseOfAprioriCovariance_( inverseOfAprioriCovariance ), considerCovariance_( considerCovariance ),
         limitConditionNumberForWarning_( 1.0E8 ), reintegrateEquationsOnFirstIteration_( true ), reintegrateVariationalEquations_( true ),
-        saveDesignMatrix_( true ), printOutput_( true )
+        saveDesignMatrix_( true ), printOutput_( true ), useSparseDesignMatrix_( false )
     {
         if( observationDataset_ == nullptr )
         {
@@ -284,6 +295,28 @@ public:
         return considerParametersIncluded_;
     }
 
+    bool getSparseDesignMatrix( ) const
+    {
+        return useSparseDesignMatrix_;
+    }
+
+    void setSparseDesignMatrix( bool s )
+    {
+        useSparseDesignMatrix_ = s;
+    }
+
+    //! Function to get the settings of the solver of the normal equations (nullptr for the default of the matrix storage)
+    std::shared_ptr< linear_algebra::NormalEquationsSolverSettings > getNormalEquationsSolverSettings( ) const
+    {
+        return normalEquationsSolverSettings_;
+    }
+
+    //! Function to set the settings of the solver of the normal equations (nullptr for the default of the matrix storage)
+    void setNormalEquationsSolverSettings( const std::shared_ptr< linear_algebra::NormalEquationsSolverSettings >& solverSettings )
+    {
+        normalEquationsSolverSettings_ = solverSettings;
+    }
+
     //! Configure soft inter-arc translational state continuity priors.
     /*!
      * Configure soft inter-arc translational state continuity priors for covariance analysis and estimation.
@@ -337,6 +370,12 @@ protected:
     //! Boolean denoting whether consider parameters are included in the covariance analysis
     bool considerParametersIncluded_;
 
+    //! Boolean denoting whether to use a sparse design matrix
+    bool useSparseDesignMatrix_;
+
+    //! Settings of the solver of the normal equations (nullptr for the default of the matrix storage)
+    std::shared_ptr< linear_algebra::NormalEquationsSolverSettings > normalEquationsSolverSettings_;
+
     //! Soft inter-arc translational state continuity priors. Empty by default (feature off).
     std::vector< std::shared_ptr< InterArcStateContinuityConstraintSettings > > interArcContinuityConstraints_;
 };
@@ -381,8 +420,10 @@ public:
             std::cout << "Required residual level achieved" << std::endl;
             isConverged = 1;
         }
-        if( ( std::distance( rmsResidualHistory.begin( ), std::max_element( rmsResidualHistory.begin( ), rmsResidualHistory.end( ) ) ) -
-              rmsResidualHistory.size( ) ) < numberOfIterationsWithoutImprovement_ )
+        // Number of iterations since the lowest residual was reached
+        const std::size_t iterationsWithoutImprovement = rmsResidualHistory.size( ) - 1 -
+                std::distance( rmsResidualHistory.begin( ), std::min_element( rmsResidualHistory.begin( ), rmsResidualHistory.end( ) ) );
+        if( iterationsWithoutImprovement >= numberOfIterationsWithoutImprovement_ )
         {
             std::cout << "Too many iterations without parameter improvement" << std::endl;
             isConverged = 1;
@@ -653,15 +694,95 @@ Eigen::MatrixXd normaliseUnnormaliseInverseCovarianceMatrix( Eigen::MatrixXd& in
                                                              Eigen::VectorXd& normalisationFactors,
                                                              const bool normalise );
 
+using optionalAnyMatrix = std::variant< std::monostate, Eigen::MatrixXd, Eigen::SparseMatrix< double > >;
+
+//! Function to get the number of columns of an optionally saved (dense or sparse) matrix; zero if it is absent
+inline int getNumberOfColumns( const optionalAnyMatrix& matrix )
+{
+    return std::visit(
+            []( const auto& m ) -> int {
+                if constexpr( std::is_same_v< std::decay_t< decltype( m ) >, std::monostate > )
+                {
+                    return 0;
+                }
+                else
+                {
+                    return static_cast< int >( m.cols( ) );
+                }
+            },
+            matrix );
+}
+
+//! Function to compare two optionally saved (dense or sparse) matrices for exact equality of storage type and values
+/*!
+ * Sparse matrices are compared by value, independent of explicitly stored zeros, with the same semantics as the comparison
+ * of dense matrices (NaN entries compare unequal).
+ */
+inline bool areOptionalMatricesEqual( const optionalAnyMatrix& first, const optionalAnyMatrix& second )
+{
+    if( first.index( ) != second.index( ) )
+    {
+        return false;
+    }
+    else if( std::holds_alternative< Eigen::MatrixXd >( first ) )
+    {
+        const Eigen::MatrixXd& firstMatrix = std::get< Eigen::MatrixXd >( first );
+        const Eigen::MatrixXd& secondMatrix = std::get< Eigen::MatrixXd >( second );
+        return firstMatrix.rows( ) == secondMatrix.rows( ) && firstMatrix.cols( ) == secondMatrix.cols( ) && firstMatrix == secondMatrix;
+    }
+    else if( std::holds_alternative< Eigen::SparseMatrix< double > >( first ) )
+    {
+        Eigen::SparseMatrix< double > firstMatrix = std::get< Eigen::SparseMatrix< double > >( first );
+        Eigen::SparseMatrix< double > secondMatrix = std::get< Eigen::SparseMatrix< double > >( second );
+        if( firstMatrix.rows( ) != secondMatrix.rows( ) || firstMatrix.cols( ) != secondMatrix.cols( ) )
+        {
+            return false;
+        }
+
+        // Remove explicitly stored zeros (keeping NaN entries), after which equal matrices have identical compressed storage
+        auto isNotZero = []( const Eigen::Index&, const Eigen::Index&, const double& value ) { return value != 0.0; };
+        firstMatrix.prune( isNotZero );
+        secondMatrix.prune( isNotZero );
+        firstMatrix.makeCompressed( );
+        secondMatrix.makeCompressed( );
+        if( firstMatrix.nonZeros( ) != secondMatrix.nonZeros( ) )
+        {
+            return false;
+        }
+        for( Eigen::Index k = 0; k <= firstMatrix.outerSize( ); k++ )
+        {
+            if( firstMatrix.outerIndexPtr( )[ k ] != secondMatrix.outerIndexPtr( )[ k ] )
+            {
+                return false;
+            }
+        }
+        for( Eigen::Index k = 0; k < firstMatrix.nonZeros( ); k++ )
+        {
+            if( firstMatrix.innerIndexPtr( )[ k ] != secondMatrix.innerIndexPtr( )[ k ] ||
+                !( firstMatrix.valuePtr( )[ k ] == secondMatrix.valuePtr( )[ k ] ) )
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+    else
+    {
+        // Both absent
+        return true;
+    }
+}
+
 template< typename ObservationScalarType = double, typename TimeType = double >
 struct CovarianceAnalysisOutput {
     virtual ~CovarianceAnalysisOutput( ) = default;
 
     //! Construct covariance output with an optional full sparse observation weight matrix.
-    CovarianceAnalysisOutput( const Eigen::MatrixXd& normalizedDesignMatrix,
+    CovarianceAnalysisOutput( const optionalAnyMatrix& normalizedDesignMatrix,
                               const Eigen::VectorXd& weightsMatrixDiagonal,
                               const Eigen::VectorXd& designMatrixTransformationDiagonal,
                               const Eigen::MatrixXd& inverseNormalizedCovarianceMatrix,
+                              const Eigen::MatrixXd& normalizedCovarianceMatrix,
                               const Eigen::MatrixXd& normalizedDesignMatrixConsiderParameters = Eigen::MatrixXd::Zero( 0, 0 ),
                               const Eigen::VectorXd& considerNormalizationFactors = Eigen::VectorXd::Zero( 0 ),
                               const Eigen::MatrixXd& considerCovarianceContribution = Eigen::MatrixXd::Zero( 0, 0 ),
@@ -672,15 +793,18 @@ struct CovarianceAnalysisOutput {
                               const std::vector< Eigen::VectorXd >& interArcContinuityDiscrepancies = std::vector< Eigen::VectorXd >( ) ):
         normalizedDesignMatrix_( normalizedDesignMatrix ), weightsMatrixDiagonal_( weightsMatrixDiagonal ), weightsMatrix_( weightsMatrix ),
         designMatrixTransformationDiagonal_( designMatrixTransformationDiagonal ),
-        inverseNormalizedCovarianceMatrix_( inverseNormalizedCovarianceMatrix ),
+        inverseNormalizedCovarianceMatrix_( inverseNormalizedCovarianceMatrix ), normalizedCovarianceMatrix_( normalizedCovarianceMatrix ),
         normalizedDesignMatrixConsiderParameters_( normalizedDesignMatrixConsiderParameters ),
         considerNormalizationFactors_( considerNormalizationFactors ), considerCovariance_( considerCovariance ),
         interArcContinuityCost_( interArcContinuityCost ), interArcContinuityDiscrepancies_( interArcContinuityDiscrepancies ),
         exceptionDuringPropagation_( exceptionDuringPropagation )
     {
-        if( ( normalizedDesignMatrix.rows( ) == 0 ) && ( normalizedDesignMatrix_.cols( ) == 0 ) &&
-            ( normalizedDesignMatrixConsiderParameters.rows( ) == 0 ) && ( normalizedDesignMatrixConsiderParameters.cols( ) == 0 ) &&
-            !( ( weightsMatrixDiagonal.rows( ) == 0 ) && ( inverseNormalizedCovarianceMatrix.rows( ) == 0 ) ) )
+        // There were some extensive checks here to see if the design matrix was non-empty.
+        // The idea was to use the empty matrix `MatrixXd(0, 0)` as a place-holder for
+        // no design matrix being saved. Where we use `std::optional` or `std::variant`
+        // instead, we have an explicit representation for the absence of a saved
+        // design matrix, and the current check should suffice.
+        if( normalizedDesignMatrix_.index( ) == 0 )
         {
             designMatrixSaved_ = false;
         }
@@ -694,9 +818,6 @@ struct CovarianceAnalysisOutput {
         {
             considerParametersIncluded_ = true;
         }
-
-        // Compute normalized covariance matrix
-        normalizedCovarianceMatrix_ = inverseNormalizedCovarianceMatrix_.inverse( );
 
         // Compute unnormalised inverse covariance matrix
         inverseUnnormalizedCovarianceMatrix_ = normaliseUnnormaliseInverseCovarianceMatrix(
@@ -713,7 +834,9 @@ struct CovarianceAnalysisOutput {
         if( considerParametersIncluded_ )
         {
             // Add contribution consider parameters to unnormalised covariance
-            normalizedCovarianceWithConsiderParameters_ += considerCovarianceContribution;
+            // With linear constraints, the covariance also has rows for the constraints, so only its parameter block is updated
+            normalizedCovarianceWithConsiderParameters_.topLeftCorner(
+                    considerCovarianceContribution.rows( ), considerCovarianceContribution.cols( ) ) += considerCovarianceContribution;
 
             // Compute unnormalised covariance with consider parameters
             unnormalizedCovarianceWithConsiderParameters_ = normaliseUnnormaliseCovarianceMatrix(
@@ -726,10 +849,11 @@ struct CovarianceAnalysisOutput {
     }
 
     //! Construct compatibility output without a full sparse weight matrix.
-    CovarianceAnalysisOutput( const Eigen::MatrixXd& normalizedDesignMatrix,
+    CovarianceAnalysisOutput( const optionalAnyMatrix& normalizedDesignMatrix,
                               const Eigen::VectorXd& weightsMatrixDiagonal,
                               const Eigen::VectorXd& designMatrixTransformationDiagonal,
                               const Eigen::MatrixXd& inverseNormalizedCovarianceMatrix,
+                              const Eigen::MatrixXd& normalizedCovarianceMatrix,
                               const Eigen::MatrixXd& normalizedDesignMatrixConsiderParameters,
                               const Eigen::VectorXd& considerNormalizationFactors,
                               const Eigen::MatrixXd& considerCovarianceContribution,
@@ -741,6 +865,7 @@ struct CovarianceAnalysisOutput {
                                   weightsMatrixDiagonal,
                                   designMatrixTransformationDiagonal,
                                   inverseNormalizedCovarianceMatrix,
+                                  normalizedCovarianceMatrix,
                                   normalizedDesignMatrixConsiderParameters,
                                   considerNormalizationFactors,
                                   considerCovarianceContribution,
@@ -810,49 +935,78 @@ struct CovarianceAnalysisOutput {
         return unnormalizedCovarianceMatrix_;
     }
 
+    //! Function to retrieve the matrix of normalized partial derivatives in the requested storage
+    /*!
+     * Function to retrieve the matrix of normalized partial derivatives, converted to the storage class `S`
+     * (`Dense` or `Sparse`) if it was saved in the other one.
+     * \return Matrix of normalized partial derivatives
+     */
+    template< typename S >
+    typename MatrixTraits< double, S >::matrix_type getNormalizedDesignMatrixGeneric( ) const
+    {
+        using traits = MatrixTraits< double, S >;
+        if( designMatrixSaved_ && std::holds_alternative< Eigen::MatrixXd >( normalizedDesignMatrix_ ) )
+        {
+            return traits::from_dense( std::get< Eigen::MatrixXd >( normalizedDesignMatrix_ ) );
+        }
+        else if( designMatrixSaved_ && std::holds_alternative< Eigen::SparseMatrix< double > >( normalizedDesignMatrix_ ) )
+        {
+            return traits::from_sparse( std::get< Eigen::SparseMatrix< double > >( normalizedDesignMatrix_ ) );
+        }
+        else
+        {
+            return returnNoDesignMatrixAvailableGeneric< S >( );
+        }
+    }
+
+    template< typename S >
+    typename MatrixTraits< double, S >::matrix_type getUnnormalizedDesignMatrixGeneric( ) const
+    {
+        if( designMatrixSaved_ )
+        {
+            return getNormalizedDesignMatrixGeneric< S >( ) * designMatrixTransformationDiagonal_.asDiagonal( );
+        }
+        else
+        {
+            return returnNoDesignMatrixAvailableGeneric< S >( );
+        }
+    }
+
     //! Function to retrieve the matrix of unnormalized partial derivatives
     /*!
      * Function to retrieve the matrix of unnormalized partial derivatives (typically detnoed as H)
      * \return Matrix of unnormalized partial derivatives
      */
-    Eigen::MatrixXd getUnnormalizedDesignMatrix( )
+    Eigen::MatrixXd getUnnormalizedDesignMatrix( ) const
     {
-        if( designMatrixSaved_ )
-        {
-            Eigen::MatrixXd unnormalizedPartialDerivatives =
-                    Eigen::MatrixXd::Zero( normalizedDesignMatrix_.rows( ), normalizedDesignMatrix_.cols( ) );
-
-            for( int i = 0; i < designMatrixTransformationDiagonal_.rows( ); i++ )
-            {
-                unnormalizedPartialDerivatives.block( 0, i, normalizedDesignMatrix_.rows( ), 1 ) =
-                        normalizedDesignMatrix_.block( 0, i, normalizedDesignMatrix_.rows( ), 1 ) *
-                        designMatrixTransformationDiagonal_( i );
-            }
-            return unnormalizedPartialDerivatives;
-        }
-        else
-        {
-            return returnNoDesignMatrixAvailable( );
-        }
+        return getUnnormalizedDesignMatrixGeneric< Dense >( );
     }
 
-    Eigen::MatrixXd getNormalizedDesignMatrix( )
+    //! Function to retrieve the sparse matrix of unnormalized partial derivatives
+    /*!
+     * Function to retrieve the matrix of unnormalized partial derivatives (typically detnoed as H)
+     * \return Sparse Matrix of unnormalized partial derivatives
+     */
+    Eigen::SparseMatrix< double > getUnnormalizedDesignMatrixSparse( ) const
     {
-        if( designMatrixSaved_ )
-        {
-            return normalizedDesignMatrix_;
-        }
-        else
-        {
-            return returnNoDesignMatrixAvailable( );
-        }
+        return getUnnormalizedDesignMatrixGeneric< Sparse >( );
     }
 
-    Eigen::MatrixXd getNormalizedWeightedDesignMatrix( )
+    Eigen::MatrixXd getNormalizedDesignMatrix( ) const
+    {
+        return getNormalizedDesignMatrixGeneric< Dense >( );
+    }
+
+    Eigen::SparseMatrix< double > getNormalizedDesignMatrixSparse( ) const
+    {
+        return getNormalizedDesignMatrixGeneric< Sparse >( );
+    }
+
+    Eigen::MatrixXd getNormalizedWeightedDesignMatrix( ) const
     {
         if( designMatrixSaved_ )
         {
-            Eigen::MatrixXd weightedNormalizedDesignMatrix = normalizedDesignMatrix_;
+            Eigen::MatrixXd weightedNormalizedDesignMatrix = getNormalizedDesignMatrixGeneric< Dense >( );
             if( hasFullWeightMatrix( ) )
             {
                 weightedNormalizedDesignMatrix = getSquareRootWeightedDesignMatrix( weightedNormalizedDesignMatrix );
@@ -978,12 +1132,19 @@ struct CovarianceAnalysisOutput {
         }
     }
 
-    Eigen::MatrixXd returnNoDesignMatrixAvailable( )
+    template< typename S >
+    typename MatrixTraits< double, S >::matrix_type returnNoDesignMatrixAvailableGeneric( ) const
     {
+        using matrix_t = typename MatrixTraits< double, S >::matrix_type;
         std::cerr << "Warning, returning empty matrix when retrieving design matrix, design matrix is not saved. Returning empty 0x0 "
                      "matrix. Toggle the option to save it using the CovarianceAnalysisInput.define_covariance_settings function"
                   << std::endl;
-        return Eigen::MatrixXd::Zero( 0, 0 );
+        return matrix_t( 0, 0 );
+    }
+
+    Eigen::MatrixXd returnNoDesignMatrixAvailable( ) const
+    {
+        return returnNoDesignMatrixAvailableGeneric< Dense >( );
     }
 
     //! Premultiply a design matrix by the square-root factor of the full weight matrix.
@@ -1034,7 +1195,7 @@ private:
 
 public:
     //! Matrix of observation partials (normalixed) used in estimation (may be empty if so requested)
-    Eigen::MatrixXd normalizedDesignMatrix_;
+    optionalAnyMatrix normalizedDesignMatrix_;
 
     //! Diagonal of weights matrix used in the estimation
     Eigen::VectorXd weightsMatrixDiagonal_;
@@ -1125,9 +1286,9 @@ protected:
     {
         return ( designMatrixSaved_ == rhs.designMatrixSaved_ ) && ( exceptionDuringPropagation_ == rhs.exceptionDuringPropagation_ ) &&
                 ( considerParametersIncluded_ == rhs.considerParametersIncluded_ ) &&
-                ( normalizedDesignMatrix_ == rhs.normalizedDesignMatrix_ ) && ( weightsMatrixDiagonal_ == rhs.weightsMatrixDiagonal_ ) &&
-                ( weightsMatrix_.rows( ) == rhs.weightsMatrix_.rows( ) ) && ( weightsMatrix_.cols( ) == rhs.weightsMatrix_.cols( ) ) &&
-                weightsMatrix_.isApprox( rhs.weightsMatrix_, 0.0 ) &&
+                areOptionalMatricesEqual( normalizedDesignMatrix_, rhs.normalizedDesignMatrix_ ) &&
+                ( weightsMatrixDiagonal_ == rhs.weightsMatrixDiagonal_ ) && ( weightsMatrix_.rows( ) == rhs.weightsMatrix_.rows( ) ) &&
+                ( weightsMatrix_.cols( ) == rhs.weightsMatrix_.cols( ) ) && weightsMatrix_.isApprox( rhs.weightsMatrix_, 0.0 ) &&
                 ( designMatrixTransformationDiagonal_ == rhs.designMatrixTransformationDiagonal_ ) &&
                 ( inverseNormalizedCovarianceMatrix_ == rhs.inverseNormalizedCovarianceMatrix_ ) &&
                 ( inverseUnnormalizedCovarianceMatrix_ == rhs.inverseUnnormalizedCovarianceMatrix_ ) &&
@@ -1146,11 +1307,22 @@ private:
     friend class cereal::access;
 
     //! Serialize covariance output, including its optional full weight matrix.
+    // The design matrix is stored as its storage type (0: not saved, 1: dense, 2: sparse), followed by the matrix if it was saved.
     template< class Archive >
     void save( Archive& ar, const std::uint32_t version ) const
     {
         static_cast< void >( version );
-        ar( CEREAL_NVP( normalizedDesignMatrix_ ) );
+        std::uint32_t normalizedDesignMatrixStorage = static_cast< std::uint32_t >( normalizedDesignMatrix_.index( ) );
+        ar( CEREAL_NVP( normalizedDesignMatrixStorage ) );
+        if( const Eigen::MatrixXd* denseMatrix = std::get_if< Eigen::MatrixXd >( &normalizedDesignMatrix_ ) )
+        {
+            ar( cereal::make_nvp( "normalizedDesignMatrix_", *denseMatrix ) );
+        }
+        else if( const Eigen::SparseMatrix< double >* sparseMatrix =
+                         std::get_if< Eigen::SparseMatrix< double > >( &normalizedDesignMatrix_ ) )
+        {
+            ar( cereal::make_nvp( "normalizedDesignMatrix_", *sparseMatrix ) );
+        }
         ar( CEREAL_NVP( weightsMatrixDiagonal_ ) );
         ar( CEREAL_NVP( weightsMatrix_ ) );
         ar( CEREAL_NVP( designMatrixTransformationDiagonal_ ) );
@@ -1171,25 +1343,36 @@ private:
         ar( CEREAL_NVP( considerParametersIncluded_ ) );
     }
 
-    //! Deserialize covariance output while retaining compatibility with version-zero archives.
+    //! Deserialize covariance output.
     template< class Archive >
     void load( Archive& ar, const std::uint32_t version )
     {
-        if( version > 1 )
+        static_cast< void >( version );
+        std::uint32_t normalizedDesignMatrixStorage;
+        ar( CEREAL_NVP( normalizedDesignMatrixStorage ) );
+        if( normalizedDesignMatrixStorage == 0 )
         {
-            throw std::runtime_error( "Unsupported covariance output archive version." );
+            normalizedDesignMatrix_ = std::monostate( );
         }
-        ar( CEREAL_NVP( normalizedDesignMatrix_ ) );
-        ar( CEREAL_NVP( weightsMatrixDiagonal_ ) );
-        if( version >= 1 )
+        else if( normalizedDesignMatrixStorage == 1 )
         {
-            ar( CEREAL_NVP( weightsMatrix_ ) );
+            Eigen::MatrixXd normalizedDesignMatrix;
+            ar( cereal::make_nvp( "normalizedDesignMatrix_", normalizedDesignMatrix ) );
+            normalizedDesignMatrix_ = std::move( normalizedDesignMatrix );
+        }
+        else if( normalizedDesignMatrixStorage == 2 )
+        {
+            Eigen::SparseMatrix< double > normalizedDesignMatrix;
+            ar( cereal::make_nvp( "normalizedDesignMatrix_", normalizedDesignMatrix ) );
+            normalizedDesignMatrix_ = std::move( normalizedDesignMatrix );
         }
         else
         {
-            // The base-branch format stored only diagonal weights.
-            weightsMatrix_.resize( 0, 0 );
+            throw std::runtime_error( "Cannot deserialize CovarianceAnalysisOutput: unknown design matrix storage type " +
+                                      std::to_string( normalizedDesignMatrixStorage ) + "." );
         }
+        ar( CEREAL_NVP( weightsMatrixDiagonal_ ) );
+        ar( CEREAL_NVP( weightsMatrix_ ) );
         ar( CEREAL_NVP( designMatrixTransformationDiagonal_ ) );
         ar( CEREAL_NVP( inverseNormalizedCovarianceMatrix_ ) );
         ar( CEREAL_NVP( inverseUnnormalizedCovarianceMatrix_ ) );
@@ -1209,6 +1392,36 @@ private:
     }
 };
 
+//! Least-squares cost of one estimation iteration, split into its parts
+struct EstimationCost {
+    //! Weighted observation residual cost, 0.5 r^T W r
+    double observationCost = 0.0;
+
+    //! A priori cost, 0.5 dx^T P0^-1 dx, of the deviation from the a priori parameters (zero if this deviation is not used)
+    double aprioriCost = 0.0;
+
+    //! Cost of the soft inter-arc continuity constraints (zero if there are none)
+    double interArcContinuityCost = 0.0;
+
+    //! Function to get the total cost, which is used to select the best iteration
+    double getTotalCost( ) const
+    {
+        return observationCost + aprioriCost + interArcContinuityCost;
+    }
+
+    bool operator==( const EstimationCost& rhs ) const
+    {
+        return ( observationCost == rhs.observationCost ) && ( aprioriCost == rhs.aprioriCost ) &&
+                ( interArcContinuityCost == rhs.interArcContinuityCost );
+    }
+
+    template< class Archive >
+    void serialize( Archive& ar )
+    {
+        ar( CEREAL_NVP( observationCost ), CEREAL_NVP( aprioriCost ), CEREAL_NVP( interArcContinuityCost ) );
+    }
+};
+
 //! Data structure through which the output of the orbit determination is communicated
 template< typename ObservationScalarType = double, typename TimeType = double >
 struct EstimationOutput : public CovarianceAnalysisOutput< ObservationScalarType, TimeType > {
@@ -1225,6 +1438,7 @@ struct EstimationOutput : public CovarianceAnalysisOutput< ObservationScalarType
      * \param designMatrixTransformationDiagonal Vector of values by which the columns of the unnormalized information
      * matrix were divided to normalize its entries.
      * \param inverseNormalizedCovarianceMatrix Inverse of postfit normalized covariance matrix
+     * \param normalizedCovarianceMatrix Postfit normalized covariance matrix, from the same solver as the estimate
      * \param residualStandardDeviation Standard deviation of postfit residuals vector
      * \param residualHistory Vector of residuals per iteration, including inactive observations
      * \param parameterHistory Vector of parameter vectors per iteration (entry 1 is pre-estimation values)
@@ -1238,11 +1452,12 @@ struct EstimationOutput : public CovarianceAnalysisOutput< ObservationScalarType
      */
     EstimationOutput( const Eigen::Matrix< ObservationScalarType, Eigen::Dynamic, 1 >& parameterEstimate,
                       const Eigen::VectorXd& residuals,
-                      const Eigen::MatrixXd& normalizedDesignMatrix,
+                      const optionalAnyMatrix& normalizedDesignMatrix,
                       const Eigen::VectorXd& weightsMatrixDiagonal,
                       const Eigen::SparseMatrix< double >& weightsMatrix,
                       const Eigen::VectorXd& designMatrixTransformationDiagonal,
                       const Eigen::MatrixXd& inverseNormalizedCovarianceMatrix,
+                      const Eigen::MatrixXd& normalizedCovarianceMatrix,
                       const double residualStandardDeviation,
                       const int bestIteration,
                       const std::vector< Eigen::VectorXd >& residualHistory = std::vector< Eigen::VectorXd >( ),
@@ -1261,6 +1476,7 @@ struct EstimationOutput : public CovarianceAnalysisOutput< ObservationScalarType
                                                                      weightsMatrixDiagonal,
                                                                      designMatrixTransformationDiagonal,
                                                                      inverseNormalizedCovarianceMatrix,
+                                                                     normalizedCovarianceMatrix,
                                                                      normalizedDesignMatrixConsiderParameters,
                                                                      considerNormalizationFactors,
                                                                      covarianceConsiderContribution,
@@ -1272,16 +1488,17 @@ struct EstimationOutput : public CovarianceAnalysisOutput< ObservationScalarType
         parameterEstimate_( parameterEstimate ), residuals_( residuals ), bestIteration_( bestIteration ),
         residualStandardDeviation_( residualStandardDeviation ), residualHistory_( residualHistory ), parameterHistory_( parameterHistory ),
         activeFlagsPerIteration_( activeFlagsPerIteration ), exceptionDuringInversion_( exceptionDuringInversion ),
-        numberOfParameters_( normalizedDesignMatrix.cols( ) )
+        numberOfParameters_( getNumberOfColumns( normalizedDesignMatrix ) )
     {}
 
     //! Construct compatibility estimation output without a full sparse weight matrix.
     EstimationOutput( const Eigen::Matrix< ObservationScalarType, Eigen::Dynamic, 1 >& parameterEstimate,
                       const Eigen::VectorXd& residuals,
-                      const Eigen::MatrixXd& normalizedDesignMatrix,
+                      const optionalAnyMatrix& normalizedDesignMatrix,
                       const Eigen::VectorXd& weightsMatrixDiagonal,
                       const Eigen::VectorXd& designMatrixTransformationDiagonal,
                       const Eigen::MatrixXd& inverseNormalizedCovarianceMatrix,
+                      const Eigen::MatrixXd& normalizedCovarianceMatrix,
                       const double residualStandardDeviation,
                       const int bestIteration,
                       const std::vector< Eigen::VectorXd >& residualHistory = std::vector< Eigen::VectorXd >( ),
@@ -1303,6 +1520,7 @@ struct EstimationOutput : public CovarianceAnalysisOutput< ObservationScalarType
                           Eigen::SparseMatrix< double >( ),
                           designMatrixTransformationDiagonal,
                           inverseNormalizedCovarianceMatrix,
+                          normalizedCovarianceMatrix,
                           residualStandardDeviation,
                           bestIteration,
                           residualHistory,
@@ -1452,6 +1670,18 @@ struct EstimationOutput : public CovarianceAnalysisOutput< ObservationScalarType
         return interArcContinuityCostHistory_;
     }
 
+    //! Function to set the cost per iteration
+    void setCostHistory( const std::vector< EstimationCost >& costHistory )
+    {
+        costHistory_ = costHistory;
+    }
+
+    //! Function to get the cost per iteration
+    const std::vector< EstimationCost >& getCostHistory( ) const
+    {
+        return costHistory_;
+    }
+
     void setInterArcContinuityDiscrepancyHistory( const std::vector< std::vector< Eigen::VectorXd > >& history )
     {
         interArcContinuityDiscrepancyHistory_ = history;
@@ -1505,6 +1735,9 @@ struct EstimationOutput : public CovarianceAnalysisOutput< ObservationScalarType
     //! Populated via setInterArcContinuityDiscrepancyHistory; see comment above for rationale.
     std::vector< std::vector< Eigen::VectorXd > > interArcContinuityDiscrepancyHistory_;
 
+    //! Least-squares cost per iteration
+    std::vector< EstimationCost > costHistory_;
+
     //    //! List of numerical solutions of dynamics (per iteration, per arc)
     //    std::vector< std::vector< std::map< TimeType, Eigen::Matrix< ObservationScalarType, Eigen::Dynamic, 1 > > > >
     //    dynamicsHistoryPerIteration_;
@@ -1545,7 +1778,8 @@ protected:
                 ( activeFlagsPerIteration_ == rhs.activeFlagsPerIteration_ ) &&
                 ( exceptionDuringInversion_ == rhs.exceptionDuringInversion_ ) && ( numberOfParameters_ == rhs.numberOfParameters_ ) &&
                 ( interArcContinuityCostHistory_ == rhs.interArcContinuityCostHistory_ ) &&
-                ( interArcContinuityDiscrepancyHistory_ == rhs.interArcContinuityDiscrepancyHistory_ );
+                ( interArcContinuityDiscrepancyHistory_ == rhs.interArcContinuityDiscrepancyHistory_ ) &&
+                ( costHistory_ == rhs.costHistory_ );
     }
 
 private:
@@ -1569,16 +1803,14 @@ private:
         ar( CEREAL_NVP( interArcContinuityCostHistory_ ) );
         ar( CEREAL_NVP( interArcContinuityDiscrepancyHistory_ ) );
         ar( CEREAL_NVP( activeFlagsPerIteration_ ) );
+        ar( CEREAL_NVP( costHistory_ ) );
     }
 
     //! Deserialize estimation output fields for the requested archive version.
     template< class Archive >
     void load( Archive& ar, const std::uint32_t version )
     {
-        if( version > 1 )
-        {
-            throw std::runtime_error( "Unsupported estimation output archive version." );
-        }
+        static_cast< void >( version );
         ar( cereal::base_class< CovarianceAnalysisOutput< ObservationScalarType, TimeType > >( this ) );
         ar( CEREAL_NVP( parameterEstimate_ ) );
         ar( CEREAL_NVP( residuals_ ) );
@@ -1591,19 +1823,15 @@ private:
         ar( CEREAL_NVP( simulationResultsPerIteration_ ) );
         ar( CEREAL_NVP( interArcContinuityCostHistory_ ) );
         ar( CEREAL_NVP( interArcContinuityDiscrepancyHistory_ ) );
-        activeFlagsPerIteration_.clear( );
-        if( version >= 1 )
-        {
-            ar( CEREAL_NVP( activeFlagsPerIteration_ ) );
-        }
+        ar( CEREAL_NVP( activeFlagsPerIteration_ ) );
+        ar( CEREAL_NVP( costHistory_ ) );
     }
 };
 
-// extern template class CovarianceAnalysisInput< double, double >;
-// extern template struct CovarianceAnalysisOutput< double >;
-//
-// extern template class EstimationInput< double, double >;
-// extern template struct EstimationOutput< double >;
+#if TUDAT_BUILD_EXPLICIT_INSTANTIATIONS
+extern template struct CovarianceAnalysisOutput< double, double >;
+extern template struct EstimationOutput< double, double >;
+#endif
 
 // Type aliases for CEREAL_REGISTER_TYPE registration
 using CovarianceAnalysisOutputDD = CovarianceAnalysisOutput< double, double >;

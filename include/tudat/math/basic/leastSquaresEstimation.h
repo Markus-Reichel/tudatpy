@@ -15,11 +15,19 @@
 #ifndef TUDAT_LEASTSQUARESESTIMATION_H
 #define TUDAT_LEASTSQUARESESTIMATION_H
 
-#include <map>
+#include <functional>
+#include <iostream>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <utility>
 
 #include <Eigen/Core>
 #include <Eigen/SparseCore>
 #include <Eigen/SVD>
+
+#include "leastSquaresTraits.h"
+#include "normalEquationsSolver.h"
 
 namespace tudat
 {
@@ -33,35 +41,53 @@ namespace linear_algebra
  * \param designMatrix Matrix for which condition number is to be computed
  * \return Condition number of matrix
  */
-double getConditionNumberOfDesignMatrix( const Eigen::MatrixXd designMatrix );
-
-//! Function to get condition number of matrix from SVD decomposition
-/*!
- *  Function to get condition number of matrix from SVD decomposition
- * \param singularValueDecomposition SVD decomposition of matrix
- * \tparam Options Options for the underlying Eigen JacobiSVD decomposition
- * \return Condition number of matrix
- */
-template< int Options >
-double getConditionNumberOfDecomposedMatrix( const Eigen::JacobiSVD< Eigen::MatrixXd, Options >& singularValueDecomposition )
+template< typename M >
+typename from_eigen< M >::value_type getConditionNumberOfDesignMatrix( const M& designMatrix )
 {
-    Eigen::VectorXd singularValues = singularValueDecomposition.singularValues( );
-    return singularValues( 0 ) / singularValues( singularValues.rows( ) - 1 );
+    return getConditionNumberOfDecomposedMatrix( designMatrix.template jacobiSvd< Eigen::ComputeThinU | Eigen::ComputeFullV >( ) );
+}
+
+//! Solve system of equations, checking condition number in the process where the solver supports it
+/*!
+ * Solve system of equations A*x = b for the vector x, with the default solver for the storage type of the matrix
+ * (Jacobi SVD for dense matrices, sparse QR for sparse matrices), see `createNormalEquationsSolver`.
+ * \param matrixToInvert Matrix A that is to be inverted to solve the equation
+ * \param rightHandSideVector Vector on the righthandside of the matrix equation that is to be solved
+ * \param limitConditionNumberForWarning Maximum value of the condition number of the covariance matrix that is allowed
+ * (warning printed when exceeded, dense matrices only)
+ * \return Solution x of matrix equation A*x=b
+ */
+template< typename M >
+typename from_eigen< M >::dense_vector_type solveSystemOfEquations(
+        const M& matrixToInvert,
+        const typename from_eigen< M >::dense_vector_type& rightHandSideVector,
+        typename from_eigen< M >::value_type limitConditionNumberForWarning = 1.0E8 )
+{
+    auto solver = createNormalEquationsSolver< M >( nullptr );
+    solver->factorize( matrixToInvert, limitConditionNumberForWarning );
+    return solver->solve( rightHandSideVector );
 }
 
 //! Solve system of equations with SVD decomposition, checking condition number in the process
 /*!
  * Solve system of equations with SVD decomposition, checking condition number in the process. This function solves
- * A*x = b for the vector x.
+ * A*x = b for the vector x. Dense matrices only; use `solveSystemOfEquations` to select the solver from the storage type.
  * \param matrixToInvert Matrix A that is to be inverted to solve the equation
  * \param rightHandSideVector Vector on the righthandside of the matrix equation that is to be solved
  * \param limitConditionNumberForWarning Maximum value of the condition number of the covariance matrix that is allowed
  * (warning printed when exceeded)
  * \return Solution x of matrix equation A*x=b
  */
-Eigen::VectorXd solveSystemOfEquationsWithSvd( const Eigen::MatrixXd matrixToInvert,
-                                               const Eigen::VectorXd rightHandSideVector,
-                                               const double limitConditionNumberForWarning = 1.0E8 );
+template< typename M >
+typename from_eigen< M >::dense_vector_type solveSystemOfEquationsWithSvd(
+        const M& matrixToInvert,
+        const typename from_eigen< M >::dense_vector_type& rightHandSideVector,
+        typename from_eigen< M >::value_type limitConditionNumberForWarning = 1.0E8 )
+{
+    auto solver = createNormalEquationsSolver< M >( jacobiSvdSolver( ) );
+    solver->factorize( matrixToInvert, limitConditionNumberForWarning );
+    return solver->solve( rightHandSideVector );
+}
 
 //! Function to multiply information matrix by diagonal weights matrix
 /*!
@@ -71,82 +97,103 @@ Eigen::VectorXd solveSystemOfEquationsWithSvd( const Eigen::MatrixXd matrixToInv
  * \param diagonalOfWeightMatrix Diagonal of observation weights matrix (assumes all weights to be uncorrelated)
  * \return designMatrix, premultiplied by square matrix with diagonalOfWeightMatrix as diagonal elements
  */
-Eigen::MatrixXd multiplyDesignMatrixByDiagonalWeightMatrix( const Eigen::MatrixXd& designMatrix,
-                                                            const Eigen::VectorXd& diagonalOfWeightMatrix );
+template< typename M >
+M multiplyDesignMatrixByDiagonalWeightMatrix( const M& designMatrix,
+                                              const typename from_eigen< M >::dense_vector_type& diagonalOfWeightMatrix )
+{
+    return diagonalOfWeightMatrix.asDiagonal( ) * designMatrix;
+}
 
-//! Function to multiply information matrix by a sparse full weights matrix.
-/*!
- * Function to multiply the design matrix by a full observation weights matrix:
- * \f$ W H \f$. This overload is used when correlations are present between
- * scalar observation entries, so the weight matrix cannot be represented by a
- * diagonal vector.
- * \param designMatrix Matrix containing partial derivatives of observations
- * (rows) w.r.t. estimated parameters (columns)
- * \param weightMatrix Sparse full observation weights matrix. Its row and
- * column count must equal the number of design-matrix rows.
- * \return designMatrix premultiplied by weightMatrix
- */
-Eigen::MatrixXd multiplyDesignMatrixByWeightMatrix( const Eigen::MatrixXd& designMatrix,
-                                                    const Eigen::SparseMatrix< double >& weightMatrix );
-
+// TODO: ask dominic about replacing arguments with std::optional.
 //! Function to compute inverse of covariance matrix at current iteration, including influence of a priori information
 /*!
  * Function to compute inverse of covariance matrix at current iteration, including influence of a priori information
  * \param designMatrix Matrix containing partial derivatives of observations (rows) w.r.t. estimated parameters
  * (columns)
- * \param diagonalOfWeightMatrix Diagonal of observation weights matrix (assumes all weights to be uncorrelated)
+ * \param weights Observation weights, as the diagonal of the weights matrix (uncorrelated observations) or as a sparse
+ * full weights matrix (correlated observations)
  * \param inverseOfAPrioriCovarianceMatrix Inverse of a priori covariance matrix
  * (warning printed when exceeded)
  * \return Inverse of covariance matrix at current iteration
  */
+template< typename M, typename W = typename from_eigen< M >::dense_vector_type >
+M calculateInverseOfUpdatedCovarianceMatrix(
+        const M& designMatrix,
+        const W& weights,
+        const M& inverseOfAPrioriCovarianceMatrix,
+        const std::optional< M >& constraintMultiplier = std::nullopt,
+        const std::optional< typename from_eigen< M >::dense_vector_type >& constraintRightHandside = std::nullopt,
+        typename from_eigen< M >::value_type limitConditionNumberForWarning = 1.0E8 )
+{
+    using traits = typename from_eigen< M >::traits;
 
-Eigen::MatrixXd calculateInverseOfUpdatedCovarianceMatrix( const Eigen::MatrixXd& designMatrix,
-                                                           const Eigen::VectorXd& diagonalOfWeightMatrix,
-                                                           const Eigen::MatrixXd& inverseOfAPrioriCovarianceMatrix,
-                                                           const Eigen::MatrixXd& constraintMultiplier = Eigen::MatrixXd( 0, 0 ),
-                                                           const Eigen::VectorXd& constraintRightHandside = Eigen::VectorXd( 0 ),
-                                                           const double limitConditionNumberForWarning = 1.0E8 );
+    // Information matrix, including a priori information
+    M inverseOfCovarianceMatrix;
+    if constexpr( std::is_same_v< W, typename from_eigen< M >::dense_vector_type > )
+    {
+        inverseOfCovarianceMatrix = inverseOfAPrioriCovarianceMatrix + designMatrix.transpose( ) * weights.asDiagonal( ) * designMatrix;
+    }
+    else
+    {
+        const M weightedNormalMatrix = designMatrix.transpose( ) * ( weights * designMatrix );
+        inverseOfCovarianceMatrix = inverseOfAPrioriCovarianceMatrix + weightedNormalMatrix;
+    }
 
-//! Function to compute inverse covariance for a sparse full observation weight matrix.
+    // Add constraints to inverse covariance matrix if required
+    if( constraintMultiplier )
+    {
+        if( !constraintRightHandside )
+        {
+            throw std::runtime_error(
+                    "Error when performing constrained least-squares, both multiplier and right-hand-side should be given." );
+        }
+
+        if( constraintMultiplier->rows( ) != constraintRightHandside->rows( ) )
+        {
+            throw std::runtime_error( "Error when performing constrained least-squares, constraints are incompatible" );
+        }
+
+        if( constraintMultiplier->cols( ) != designMatrix.cols( ) )
+        {
+            throw std::runtime_error( "Error when performing constrained least-squares, constraints are incompatible with partials" );
+        }
+
+        traits::extend_symmetric( inverseOfCovarianceMatrix, *constraintMultiplier );
+    }
+
+    return inverseOfCovarianceMatrix;
+}
+
+//! Function to compute the contribution of consider parameters to the covariance matrix
+template< typename M >
+M calculateConsiderParametersCovarianceContribution( const M& normalisedCovarianceMatrix,
+                                                     const M& designMatrix,
+                                                     const typename from_eigen< M >::dense_vector_type& diagonalOfWeightMatrix,
+                                                     const M& considerDesignMatrix,
+                                                     const M& considerCovariance )
+{
+    M covarianceTimesWeightedPartials =
+            normalisedCovarianceMatrix * multiplyDesignMatrixByDiagonalWeightMatrix( designMatrix, diagonalOfWeightMatrix ).transpose( );
+    return ( covarianceTimesWeightedPartials * considerDesignMatrix ) * considerCovariance *
+            ( considerDesignMatrix.transpose( ) * covarianceTimesWeightedPartials.transpose( ) );
+}
+
+//! Function to compute the contribution of consider parameters to the covariance matrix, for a sparse design matrix
 /*!
- * Computes \f$ H^T W H + P_0^{-1} \f$, optionally augmented with linear
- * equality constraints. This overload keeps the off-diagonal observation
- * weights sparse until multiplication with the dense design matrix.
- * \param designMatrix Matrix containing partial derivatives of observations
- * (rows) w.r.t. estimated parameters (columns)
- * \param weightMatrix Sparse full observation weights matrix
- * \param inverseOfAPrioriCovarianceMatrix Inverse of a priori covariance matrix
- * \param constraintMultiplier Multiplier for estimated parameter that defines
- * linear constraints
- * \param constraintRightHandside Right-hand side of the linear constraints
- * \param limitConditionNumberForWarning Maximum allowed condition number before
- * printing a warning
- * \return Inverse covariance matrix at current iteration
+ * Same result as the dense version, (P H^T W H_c) C (P H^T W H_c)^T with P the normalised covariance, but with the products
+ * ordered such that no dense matrix of the size of the design matrix is formed. The partials w.r.t. the consider parameters
+ * (H_c) are dense.
  */
-Eigen::MatrixXd calculateInverseOfUpdatedCovarianceMatrix( const Eigen::MatrixXd& designMatrix,
-                                                           const Eigen::SparseMatrix< double >& weightMatrix,
-                                                           const Eigen::MatrixXd& inverseOfAPrioriCovarianceMatrix,
-                                                           const Eigen::MatrixXd& constraintMultiplier = Eigen::MatrixXd( 0, 0 ),
-                                                           const Eigen::VectorXd& constraintRightHandside = Eigen::VectorXd( 0 ),
-                                                           const double limitConditionNumberForWarning = 1.0E8 );
-
-//! Function to compute inverse of covariance matrix at current iteration
-/*!
- * Function to compute inverse of covariance matrix at current iteration
- * \param designMatrix Matrix containing partial derivatives of observations (rows) w.r.t. estimated parameters
- * (columns)
- * \param diagonalOfWeightMatrix Diagonal of observation weights matrix (assumes all weights to be uncorrelated)
- * \return Inverse of covariance matrix at current iteration
- */
-Eigen::MatrixXd calculateInverseOfUpdatedCovarianceMatrix( const Eigen::MatrixXd& designMatrix,
-                                                           const Eigen::VectorXd& diagonalOfWeightMatrix,
-                                                           const double limitConditionNumberForWarning = 1.0E8 );
-
-Eigen::MatrixXd calculateConsiderParametersCovarianceContribution( const Eigen::MatrixXd& normalisedCovarianceMatrix,
-                                                                   const Eigen::MatrixXd& designMatrix,
-                                                                   const Eigen::VectorXd& diagonalOfWeightMatrix,
-                                                                   const Eigen::MatrixXd& considerDesignMatrix,
-                                                                   const Eigen::MatrixXd& considerCovariance );
+inline Eigen::MatrixXd calculateConsiderParametersCovarianceContribution( const Eigen::MatrixXd& normalisedCovarianceMatrix,
+                                                                          const Eigen::SparseMatrix< double >& designMatrix,
+                                                                          const Eigen::VectorXd& diagonalOfWeightMatrix,
+                                                                          const Eigen::MatrixXd& considerDesignMatrix,
+                                                                          const Eigen::MatrixXd& considerCovariance )
+{
+    Eigen::MatrixXd covarianceTimesConsiderNormalMatrix =
+            normalisedCovarianceMatrix * ( designMatrix.transpose( ) * ( diagonalOfWeightMatrix.asDiagonal( ) * considerDesignMatrix ) );
+    return covarianceTimesConsiderNormalMatrix * considerCovariance * covarianceTimesConsiderNormalMatrix.transpose( );
+}
 
 //! Function to compute consider-parameter covariance contribution for sparse full weights.
 /*!
@@ -166,26 +213,180 @@ Eigen::MatrixXd calculateConsiderParametersCovarianceContribution( const Eigen::
                                                                    const Eigen::MatrixXd& considerDesignMatrix,
                                                                    const Eigen::MatrixXd& considerCovariance );
 
+//! Normal equations of a least-squares problem, with the normal matrix (inverse covariance) in storage M
+template< typename M >
+struct NormalEquations {
+    //! Normal matrix, extended with the rows and columns of the linear constraints if there are any
+    M normalMatrix;
+
+    //! Right-hand side, extended with the right-hand side of the linear constraints if there are any
+    Eigen::VectorXd rightHandSide;
+};
+
+//! Function to assemble the normal equations of a least-squares iteration
+/*!
+ * Function to assemble the normal equations of a least-squares iteration from the design matrix, weights and residuals,
+ * including a priori information, linear constraints, consider parameters and additional (soft-constraint) terms.
+ * \param designMatrix Matrix containing partial derivatives of observations (rows) w.r.t. estimated parameters
+ * (columns)
+ * \param observationResiduals Difference between measured and simulated observations
+ * \param weights Observation weights, as the diagonal of the weights matrix (uncorrelated observations) or as a sparse
+ * full weights matrix (correlated observations)
+ * \param inverseOfAPrioriCovarianceMatrix Inverse of a priori covariance matrix
+ * \param constraintMultiplier Multiplier for estimated parameter that defines linear constraint
+ * \param constraintRightHandside Right-hand side estimation linear constraint
+ * \param designMatrixConsiderParameters Design matrix w.r.t. consider parameters
+ * \param considerParametersDeviations Deviations of consider parameters from their nominal values
+ * \param additionalNormalMatrix Additional term added to the normal matrix (e.g. inter-arc continuity)
+ * \param additionalRightHandSide Additional term added to the right-hand side (e.g. inter-arc continuity)
+ * \param aprioriParameterDeviation Deviation of the current parameter estimate from the a priori parameter vector, expressed in
+ * the same normalized coordinates as the parameter correction
+ * \return Normal equations
+ */
+template< typename M, typename W = typename from_eigen< M >::dense_vector_type >
+NormalEquations< M > assembleNormalEquations(
+        const M& designMatrix,
+        const typename from_eigen< M >::dense_vector_type& observationResiduals,
+        const W& weights,
+        const M& inverseOfAPrioriCovarianceMatrix,
+        const M& constraintMultiplier = M( 0, 0 ),
+        const typename from_eigen< M >::dense_vector_type& constraintRightHandside = typename from_eigen< M >::dense_vector_type( 0 ),
+        const M& designMatrixConsiderParameters = M( 0, 0 ),
+        const typename from_eigen< M >::dense_vector_type& considerParametersDeviations = typename from_eigen< M >::dense_vector_type( 0 ),
+        const M& additionalNormalMatrix = M( 0, 0 ),
+        const typename from_eigen< M >::dense_vector_type& additionalRightHandSide = typename from_eigen< M >::dense_vector_type( 0 ),
+        const typename from_eigen< M >::dense_vector_type& aprioriParameterDeviation = typename from_eigen< M >::dense_vector_type( 0 ) )
+{
+    using traits = typename from_eigen< M >::traits;
+    using dense_vector_type = typename from_eigen< M >::dense_vector_type;
+
+    dense_vector_type residualArgument = observationResiduals;
+    if( considerParametersDeviations.size( ) > 0 && designMatrixConsiderParameters.size( ) > 0 )
+    {
+        residualArgument += designMatrixConsiderParameters * considerParametersDeviations;
+    }
+    dense_vector_type rightHandSide;
+    if constexpr( std::is_same_v< W, dense_vector_type > )
+    {
+        rightHandSide = designMatrix.transpose( ) * ( weights.cwiseProduct( residualArgument ) );
+    }
+    else
+    {
+        rightHandSide = designMatrix.transpose( ) * ( weights * residualArgument );
+    }
+
+    const int nParams = static_cast< int >( designMatrix.cols( ) );
+    if( inverseOfAPrioriCovarianceMatrix.rows( ) != nParams || inverseOfAPrioriCovarianceMatrix.cols( ) != nParams )
+    {
+        throw std::runtime_error( "Error when assembling normal equations, inverseOfAPrioriCovarianceMatrix has dimensions " +
+                                  std::to_string( inverseOfAPrioriCovarianceMatrix.rows( ) ) + "x" +
+                                  std::to_string( inverseOfAPrioriCovarianceMatrix.cols( ) ) + ", expected " + std::to_string( nParams ) +
+                                  "x" + std::to_string( nParams ) + "." );
+    }
+    if( aprioriParameterDeviation.size( ) > 0 )
+    {
+        if( aprioriParameterDeviation.size( ) != nParams )
+        {
+            throw std::runtime_error( "Error when assembling normal equations, aprioriParameterDeviation has size " +
+                                      std::to_string( aprioriParameterDeviation.size( ) ) + ", expected " + std::to_string( nParams ) +
+                                      "." );
+        }
+        // The prior residual is the a priori parameter vector minus the current estimate, i.e. the negative deviation.
+        rightHandSide -= inverseOfAPrioriCovarianceMatrix * aprioriParameterDeviation;
+    }
+
+    M inverseOfCovarianceMatrix;
+    if( constraintMultiplier.rows( ) != 0 )
+    {
+        inverseOfCovarianceMatrix = calculateInverseOfUpdatedCovarianceMatrix< M, W >(
+                designMatrix, weights, inverseOfAPrioriCovarianceMatrix, constraintMultiplier, constraintRightHandside );
+
+        int numberOfConstraints = constraintMultiplier.rows( );
+        int numberOfConstrainedParameters = constraintMultiplier.cols( );
+
+        rightHandSide.conservativeResize( numberOfConstrainedParameters + numberOfConstraints );
+        rightHandSide.segment( numberOfConstrainedParameters, numberOfConstraints ) = constraintRightHandside;
+    }
+    else
+    {
+        inverseOfCovarianceMatrix =
+                calculateInverseOfUpdatedCovarianceMatrix< M, W >( designMatrix, weights, inverseOfAPrioriCovarianceMatrix );
+    }
+
+    // Soft-constraint additions (e.g. inter-arc continuity): inject into the parameter block of the LHS/RHS,
+    // leaving any Lagrange-multiplier rows from the hard equality constraint above untouched.
+    if( additionalNormalMatrix.size( ) > 0 )
+    {
+        if( additionalNormalMatrix.rows( ) != nParams || additionalNormalMatrix.cols( ) != nParams )
+        {
+            throw std::runtime_error( "Error when assembling normal equations, additionalNormalMatrix has shape " +
+                                      std::to_string( additionalNormalMatrix.rows( ) ) + "x" +
+                                      std::to_string( additionalNormalMatrix.cols( ) ) + ", expected " + std::to_string( nParams ) + "x" +
+                                      std::to_string( nParams ) + "." );
+        }
+        traits::add_to_top_left( inverseOfCovarianceMatrix, additionalNormalMatrix );
+    }
+    if( additionalRightHandSide.size( ) > 0 )
+    {
+        if( additionalRightHandSide.size( ) != nParams )
+        {
+            throw std::runtime_error( "Error when assembling normal equations, additionalRightHandSide has size " +
+                                      std::to_string( additionalRightHandSide.size( ) ) + ", expected " + std::to_string( nParams ) + "." );
+        }
+        rightHandSide.head( nParams ) += additionalRightHandSide;
+    }
+
+    return NormalEquations< M >{ std::move( inverseOfCovarianceMatrix ), std::move( rightHandSide ) };
+}
+
 //! Function to perform an iteration least squares estimation from information matrix, weights and residuals and a priori
 //! information
 /*!
  * Function to perform an iteration least squares estimation from information matrix, weights and residuals and a priori
- * information, as is typically done in orbit determination. This function also takes an inverse if the a priori covariance
- * matrix to constrain/stabilize the inversion.
- * \param designMatrix Matrix containing partial derivatives of observations (rows) w.r.t. estimated parameters
- * (columns)
- * \param observationResiduals Difference between measured and simulated observations
- * \param diagonalOfWeightMatrix Diagonal of observation weights matrix (assumes all weights to be uncorrelated)
- * \param inverseOfAPrioriCovarianceMatrix Inverse of a priori covariance matrix
- * (warning printed when exceeded)
+ * information, as is typically done in orbit determination. The normal equations are assembled with
+ * `assembleNormalEquations` and solved with the default solver for the matrix storage. See `assembleNormalEquations` for
+ * the arguments.
  * \param limitConditionNumberForWarning Maximum value of the condition number of the covariance matrix that is allowed
- * \param constraintMultiplier Multiplier for estimated parameter that defines linear constraint
- * \param constraintRightHandside Right-hand side estimation linear constraint
- * \param aprioriParameterDeviation Deviation of the current parameter estimate from the a priori parameter vector, expressed in
- * the same normalized coordinates as the parameter correction
+ * (warning printed when exceeded)
  * \return Pair containing: (first: parameter adjustment, second: inverse covariance)
  */
-std::pair< Eigen::VectorXd, Eigen::MatrixXd > performLeastSquaresAdjustmentFromDesignMatrix(
+template< typename M >
+std::pair< typename from_eigen< M >::dense_vector_type, M > performLeastSquaresAdjustmentFromDesignMatrix(
+        const M& designMatrix,
+        const typename from_eigen< M >::dense_vector_type& observationResiduals,
+        const typename from_eigen< M >::dense_vector_type& diagonalOfWeightMatrix,
+        const M& inverseOfAPrioriCovarianceMatrix,
+        typename from_eigen< M >::value_type limitConditionNumberForWarning = 1.0E8,
+        const M& constraintMultiplier = M( 0, 0 ),
+        const typename from_eigen< M >::dense_vector_type& constraintRightHandside = typename from_eigen< M >::dense_vector_type( 0 ),
+        const M& designMatrixConsiderParameters = M( 0, 0 ),
+        const typename from_eigen< M >::dense_vector_type& considerParametersDeviations = typename from_eigen< M >::dense_vector_type( 0 ),
+        const M& additionalNormalMatrix = M( 0, 0 ),
+        const typename from_eigen< M >::dense_vector_type& additionalRightHandSide = typename from_eigen< M >::dense_vector_type( 0 ),
+        const typename from_eigen< M >::dense_vector_type& aprioriParameterDeviation = typename from_eigen< M >::dense_vector_type( 0 ) )
+{
+    NormalEquations< M > normalEquations = assembleNormalEquations< M >( designMatrix,
+                                                                         observationResiduals,
+                                                                         diagonalOfWeightMatrix,
+                                                                         inverseOfAPrioriCovarianceMatrix,
+                                                                         constraintMultiplier,
+                                                                         constraintRightHandside,
+                                                                         designMatrixConsiderParameters,
+                                                                         considerParametersDeviations,
+                                                                         additionalNormalMatrix,
+                                                                         additionalRightHandSide,
+                                                                         aprioriParameterDeviation );
+    return std::make_pair(
+            solveSystemOfEquations< M >( normalEquations.normalMatrix, normalEquations.rightHandSide, limitConditionNumberForWarning ),
+            std::move( normalEquations.normalMatrix ) );
+}
+
+//! Function to perform an iteration least squares estimation, for dense matrices
+/*!
+ * Dense version of the function above, which also accepts arguments that are convertible to dense dynamic-size matrices and
+ * vectors (e.g. fixed-size matrices or expressions), for which the template arguments of the general version cannot be deduced.
+ */
+inline std::pair< Eigen::VectorXd, Eigen::MatrixXd > performLeastSquaresAdjustmentFromDesignMatrix(
         const Eigen::MatrixXd& designMatrix,
         const Eigen::VectorXd& observationResiduals,
         const Eigen::VectorXd& diagonalOfWeightMatrix,
@@ -197,7 +398,21 @@ std::pair< Eigen::VectorXd, Eigen::MatrixXd > performLeastSquaresAdjustmentFromD
         const Eigen::VectorXd& considerParametersDeviations = Eigen::VectorXd( 0 ),
         const Eigen::MatrixXd& additionalNormalMatrix = Eigen::MatrixXd( 0, 0 ),
         const Eigen::VectorXd& additionalRightHandSide = Eigen::VectorXd( 0 ),
-        const Eigen::VectorXd& aprioriParameterDeviation = Eigen::VectorXd( 0 ) );
+        const Eigen::VectorXd& aprioriParameterDeviation = Eigen::VectorXd( 0 ) )
+{
+    return performLeastSquaresAdjustmentFromDesignMatrix< Eigen::MatrixXd >( designMatrix,
+                                                                             observationResiduals,
+                                                                             diagonalOfWeightMatrix,
+                                                                             inverseOfAPrioriCovarianceMatrix,
+                                                                             limitConditionNumberForWarning,
+                                                                             constraintMultiplier,
+                                                                             constraintRightHandside,
+                                                                             designMatrixConsiderParameters,
+                                                                             considerParametersDeviations,
+                                                                             additionalNormalMatrix,
+                                                                             additionalRightHandSide,
+                                                                             aprioriParameterDeviation );
+}
 
 //! Function to perform a least-squares iteration using a sparse full observation weight matrix.
 /*!
@@ -224,7 +439,7 @@ std::pair< Eigen::VectorXd, Eigen::MatrixXd > performLeastSquaresAdjustmentFromD
  * the same normalized coordinates as the parameter correction
  * \return Pair containing: (first: parameter adjustment, second: inverse covariance)
  */
-std::pair< Eigen::VectorXd, Eigen::MatrixXd > performLeastSquaresAdjustmentFromDesignMatrix(
+inline std::pair< Eigen::VectorXd, Eigen::MatrixXd > performLeastSquaresAdjustmentFromDesignMatrix(
         const Eigen::MatrixXd& designMatrix,
         const Eigen::VectorXd& observationResiduals,
         const Eigen::SparseMatrix< double >& weightMatrix,
@@ -236,7 +451,24 @@ std::pair< Eigen::VectorXd, Eigen::MatrixXd > performLeastSquaresAdjustmentFromD
         const Eigen::VectorXd& considerParametersDeviations = Eigen::VectorXd( 0 ),
         const Eigen::MatrixXd& additionalNormalMatrix = Eigen::MatrixXd( 0, 0 ),
         const Eigen::VectorXd& additionalRightHandSide = Eigen::VectorXd( 0 ),
-        const Eigen::VectorXd& aprioriParameterDeviation = Eigen::VectorXd( 0 ) );
+        const Eigen::VectorXd& aprioriParameterDeviation = Eigen::VectorXd( 0 ) )
+{
+    NormalEquations< Eigen::MatrixXd > normalEquations =
+            assembleNormalEquations< Eigen::MatrixXd, Eigen::SparseMatrix< double > >( designMatrix,
+                                                                                       observationResiduals,
+                                                                                       weightMatrix,
+                                                                                       inverseOfAPrioriCovarianceMatrix,
+                                                                                       constraintMultiplier,
+                                                                                       constraintRightHandside,
+                                                                                       designMatrixConsiderParameters,
+                                                                                       considerParametersDeviations,
+                                                                                       additionalNormalMatrix,
+                                                                                       additionalRightHandSide,
+                                                                                       aprioriParameterDeviation );
+    return std::make_pair( solveSystemOfEquations< Eigen::MatrixXd >(
+                                   normalEquations.normalMatrix, normalEquations.rightHandSide, limitConditionNumberForWarning ),
+                           std::move( normalEquations.normalMatrix ) );
+}
 
 //! Function to perform an iteration of least squares estimation from information matrix, weights and residuals
 /*!
@@ -250,11 +482,19 @@ std::pair< Eigen::VectorXd, Eigen::MatrixXd > performLeastSquaresAdjustmentFromD
  * (warning printed when exceeded)
  * \return Pair containing: (first: parameter adjustment, second: inverse covariance)
  */
-std::pair< Eigen::VectorXd, Eigen::MatrixXd > performLeastSquaresAdjustmentFromDesignMatrix(
-        const Eigen::MatrixXd& designMatrix,
-        const Eigen::VectorXd& observationResiduals,
-        const Eigen::VectorXd& diagonalOfWeightMatrix,
-        const double limitConditionNumberForWarning = 1.0E8 );
+template< typename M >
+std::pair< typename from_eigen< M >::dense_vector_type, M > performLeastSquaresAdjustmentFromDesignMatrix(
+        const M& designMatrix,
+        const typename from_eigen< M >::dense_vector_type& observationResiduals,
+        const typename from_eigen< M >::dense_vector_type& diagonalOfWeightMatrix,
+        typename from_eigen< M >::value_type limitConditionNumberForWarning = 1.0E8 )
+{
+    return performLeastSquaresAdjustmentFromDesignMatrix< M >( designMatrix,
+                                                               observationResiduals,
+                                                               diagonalOfWeightMatrix,
+                                                               from_eigen< M >::traits::zeros( designMatrix.cols( ), designMatrix.cols( ) ),
+                                                               limitConditionNumberForWarning );
+}
 
 //! Function to perform an unconstrained least-squares iteration using sparse full weights.
 /*!
@@ -267,11 +507,18 @@ std::pair< Eigen::VectorXd, Eigen::MatrixXd > performLeastSquaresAdjustmentFromD
  * printing a warning
  * \return Pair containing: (first: parameter adjustment, second: inverse covariance)
  */
-std::pair< Eigen::VectorXd, Eigen::MatrixXd > performLeastSquaresAdjustmentFromDesignMatrix(
+inline std::pair< Eigen::VectorXd, Eigen::MatrixXd > performLeastSquaresAdjustmentFromDesignMatrix(
         const Eigen::MatrixXd& designMatrix,
         const Eigen::VectorXd& observationResiduals,
         const Eigen::SparseMatrix< double >& weightMatrix,
-        const double limitConditionNumberForWarning = 1.0E8 );
+        const double limitConditionNumberForWarning = 1.0E8 )
+{
+    return performLeastSquaresAdjustmentFromDesignMatrix( designMatrix,
+                                                          observationResiduals,
+                                                          weightMatrix,
+                                                          Eigen::MatrixXd::Zero( designMatrix.cols( ), designMatrix.cols( ) ),
+                                                          limitConditionNumberForWarning );
+}
 
 //! Function to perform an iteration of least squares estimation from information matrix and residuals
 /*!
@@ -284,42 +531,18 @@ std::pair< Eigen::VectorXd, Eigen::MatrixXd > performLeastSquaresAdjustmentFromD
  * (warning printed when exceeded)
  * \return Pair containing: (first: parameter adjustment, second: inverse covariance)
  */
-std::pair< Eigen::VectorXd, Eigen::MatrixXd > performLeastSquaresAdjustmentFromDesignMatrix(
-        const Eigen::MatrixXd& designMatrix,
-        const Eigen::VectorXd& observationResiduals,
-        const double limitConditionNumberForWarning = 1.0E8 );
-
-Eigen::VectorXd evaluatePolynomial( const Eigen::VectorXd& independentValues,
-                                    const Eigen::VectorXd& polynomialCoefficients,
-                                    const std::vector< double >& polynomialPowers );
-
-//! Function to fit a univariate polynomial through a set of data
-/*!
- *  Function to fit a univariate polynomial through a set of data. User must provide independent variables and observations
- *  (dependent variables), as well as a list of polynomial powers for which the coefficients are to be estimated.
- *  \param independentValues Independent variables of input data (e.g. time for observations as a function fo time). This
- *  variable becomes the polynomial argument.
- *  \param dependentValues Observations through which the polynomial is to be fitted, with entries defined at the
- *  corresponding entries of independentValues
- *  \param polynomialPowers List of powers of indepent variables for which coefficients are to be estimated.
- *  \return Coefficients of the polynomial powers, as estimated from the input data (in same order as polynomialPowers).
- */
-Eigen::VectorXd getLeastSquaresPolynomialFit( const Eigen::VectorXd& independentValues,
-                                              const Eigen::VectorXd& dependentValues,
-                                              const std::vector< double >& polynomialPowers );
-
-//! Function to fit a univariate polynomial through a set of data
-/*!
- *  Function to fit a univariate polynomial through a set of data. User must provide independent variables and observations
- *  (dependent variables), as well as a list of polynomial powers for which the coefficients are to be estimated.
- *  \param independentDependentValueMap Map with key: independent variables of input data (e.g. time for observations as a
- *  function fo time), this variable becomes the polynomial argument. Map value: Observations through which the polynomial
- *  is to be fitted.
- *  \param polynomialPowers List of powers of indepent variables for which coefficients are to be estimated.
- *  \return Coefficients of the polynomial powers, as estimated from the input data (in same order as polynomialPowers).
- */
-std::vector< double > getLeastSquaresPolynomialFit( const std::map< double, double >& independentDependentValueMap,
-                                                    const std::vector< double >& polynomialPowers );
+template< typename M >
+std::pair< typename from_eigen< M >::dense_vector_type, M > performLeastSquaresAdjustmentFromDesignMatrix(
+        const M& designMatrix,
+        const typename from_eigen< M >::dense_vector_type& observationResiduals,
+        typename from_eigen< M >::value_type limitConditionNumberForWarning = 1.0E8 )
+{
+    return performLeastSquaresAdjustmentFromDesignMatrix< M >(
+            designMatrix,
+            observationResiduals,
+            from_eigen< M >::dense_vector_type::Constant( observationResiduals.size( ), typename from_eigen< M >::value_type( 1 ) ),
+            limitConditionNumberForWarning );
+}
 
 //! Function to perform a non-linear least squares estimation with the Levenberg-Marquardt method.
 /*!

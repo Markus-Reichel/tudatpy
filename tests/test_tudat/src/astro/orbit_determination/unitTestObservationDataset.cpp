@@ -867,6 +867,7 @@ BOOST_AUTO_TEST_CASE( test_weighted_design_matrix_output_uses_sparse_weights )
                                                                                    diagonalWeights,
                                                                                    normalizationTerms,
                                                                                    Eigen::Matrix2d::Identity( ),
+                                                                                   Eigen::Matrix2d::Identity( ),
                                                                                    Eigen::MatrixXd::Zero( 0, 0 ),
                                                                                    Eigen::VectorXd::Zero( 0 ),
                                                                                    Eigen::MatrixXd::Zero( 0, 0 ),
@@ -914,6 +915,7 @@ BOOST_AUTO_TEST_CASE( test_large_sparse_weighted_design_matrix_uses_sparse_chole
     simulation_setup::CovarianceAnalysisOutput< double, double > covarianceOutput( normalizedDesignMatrix,
                                                                                    diagonalWeights,
                                                                                    normalizationTerms,
+                                                                                   Eigen::Matrix2d::Identity( ),
                                                                                    Eigen::Matrix2d::Identity( ),
                                                                                    Eigen::MatrixXd::Zero( 0, 0 ),
                                                                                    Eigen::VectorXd::Zero( 0 ),
@@ -2944,6 +2946,7 @@ BOOST_AUTO_TEST_CASE( test_covariance_history_preserves_correlated_weights )
                                                                             sparseWeights,
                                                                             normalization,
                                                                             Eigen::MatrixXd::Constant( 1, 1, 44.25 ),
+                                                                            Eigen::MatrixXd::Constant( 1, 1, 1.0 / 44.25 ),
                                                                             0.0,
                                                                             0 );
     const auto outputHistory = simulation_setup::calculateCovarianceUsingDataUpToEpoch( input, output, std::vector< double >{ 3.0 } );

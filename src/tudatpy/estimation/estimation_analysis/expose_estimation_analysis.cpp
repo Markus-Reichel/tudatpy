@@ -31,6 +31,7 @@
 
 namespace py = pybind11;
 namespace tss = tudat::simulation_setup;
+namespace tla = tudat::linear_algebra;
 namespace tep = tudat::estimatable_parameters;
 namespace tom = tudat::observation_models;
 namespace tp = tudat::propagators;
@@ -359,6 +360,77 @@ void expose_estimation_analysis( py::module& m )
 
      )doc" );
 
+    py::class_< tla::NormalEquationsSolverSettings, std::shared_ptr< tla::NormalEquationsSolverSettings > >(
+            m,
+            "NormalEquationsSolverSettings",
+            R"doc(
+
+         Class defining which decomposition is used to solve the normal equations of an estimation.
+
+         Instances of this class are created with the :func:`~tudatpy.estimation.estimation_analysis.jacobi_svd_solver`,
+         :func:`~tudatpy.estimation.estimation_analysis.bdc_svd_solver` and
+         :func:`~tudatpy.estimation.estimation_analysis.cholesky_solver` functions.
+
+      )doc" );
+
+    m.def( "jacobi_svd_solver",
+           &tla::jacobiSvdSolver,
+           py::arg( "singular_value_cutoff" ) = TUDAT_NAN,
+           R"doc(
+
+ Function for creating settings for a Jacobi SVD solver of the normal equations.
+
+ This is the default solver. It is robust but slow for many parameters. With a cutoff, singular values smaller than the
+ cutoff times the largest singular value (of the normalized normal matrix) are ignored, giving a truncated SVD.
+
+ Parameters
+ ----------
+ singular_value_cutoff : float, default = nan
+     Relative cutoff between 0 and 1 for the singular values. NaN means no truncation.
+ Returns
+ -------
+ :class:`~tudatpy.estimation.estimation_analysis.NormalEquationsSolverSettings`
+     Settings of the solver.
+
+     )doc" );
+
+    m.def( "bdc_svd_solver",
+           &tla::bdcSvdSolver,
+           py::arg( "singular_value_cutoff" ) = TUDAT_NAN,
+           R"doc(
+
+ Function for creating settings for a divide-and-conquer (BDC) SVD solver of the normal equations.
+
+ Gives the same result as the Jacobi SVD, but is much faster for many parameters. The cutoff works as for
+ :func:`~tudatpy.estimation.estimation_analysis.jacobi_svd_solver`.
+
+ Parameters
+ ----------
+ singular_value_cutoff : float, default = nan
+     Relative cutoff between 0 and 1 for the singular values. NaN means no truncation.
+ Returns
+ -------
+ :class:`~tudatpy.estimation.estimation_analysis.NormalEquationsSolverSettings`
+     Settings of the solver.
+
+     )doc" );
+
+    m.def( "cholesky_solver",
+           &tla::choleskySolver,
+           R"doc(
+
+ Function for creating settings for a Cholesky solver of the normal equations.
+
+ The fastest solver, for well-conditioned problems. The estimation stops with an error if the normal matrix is not
+ positive definite. It cannot be used together with linear constraints.
+
+ Returns
+ -------
+ :class:`~tudatpy.estimation.estimation_analysis.NormalEquationsSolverSettings`
+     Settings of the solver.
+
+     )doc" );
+
     m.def( "create_covariance_from_diagonal_entries",
            &tss::createCovarianceFromDiagonalEntries< STATE_SCALAR_TYPE >,
            py::arg( "parameter_set" ),
@@ -639,6 +711,15 @@ void expose_estimation_analysis( py::module& m )
          List of currently attached soft inter-arc continuity-prior settings.
 
          :type: list[InterArcStateContinuityConstraintSettings]
+      )doc" )
+            .def_property( "normal_equations_solver_settings",
+                           &tss::CovarianceAnalysisInput< STATE_SCALAR_TYPE, TIME_TYPE >::getNormalEquationsSolverSettings,
+                           &tss::CovarianceAnalysisInput< STATE_SCALAR_TYPE, TIME_TYPE >::setNormalEquationsSolverSettings,
+                           R"doc(
+
+         Settings of the solver of the normal equations. None (the default) uses a Jacobi SVD.
+
+         :type: NormalEquationsSolverSettings
       )doc" );
 
     auto estimationInputClass = py::class_< tss::EstimationInput< STATE_SCALAR_TYPE, TIME_TYPE >,
@@ -1124,6 +1205,54 @@ void expose_estimation_analysis( py::module& m )
                     TUDATPY_DEF_PICKLE( tss::CovarianceAnalysisOutput< STATE_SCALAR_TYPE, TIME_TYPE > )
                             TUDATPY_DEF_EQ_NE( tss::CovarianceAnalysisOutput< STATE_SCALAR_TYPE, TIME_TYPE > );
 
+    py::class_< tss::EstimationCost >( m,
+                                       "EstimationCost",
+                                       R"doc(
+
+         Least-squares cost of one estimation iteration, split into its parts.
+
+      )doc" )
+            .def_readonly( "observation_cost",
+                           &tss::EstimationCost::observationCost,
+                           R"doc(
+
+         **read-only**
+
+         Weighted observation residual cost, :math:`\frac{1}{2}\mathbf{r}^{T}\mathbf{W}\mathbf{r}`.
+
+         :type: float
+      )doc" )
+            .def_readonly( "a_priori_cost",
+                           &tss::EstimationCost::aprioriCost,
+                           R"doc(
+
+         **read-only**
+
+         Cost of the deviation from the a priori parameters. Zero unless ``apply_apriori_parameter_deviation`` is used.
+
+         :type: float
+      )doc" )
+            .def_readonly( "inter_arc_continuity_cost",
+                           &tss::EstimationCost::interArcContinuityCost,
+                           R"doc(
+
+         **read-only**
+
+         Cost of the soft inter-arc continuity constraints. Zero if there are none.
+
+         :type: float
+      )doc" )
+            .def_property_readonly( "total_cost",
+                                    &tss::EstimationCost::getTotalCost,
+                                    R"doc(
+
+         **read-only**
+
+         Sum of all parts, which is used to select the best iteration.
+
+         :type: float
+      )doc" );
+
     py::class_< tss::EstimationOutput< STATE_SCALAR_TYPE, TIME_TYPE >,
                 std::shared_ptr< tss::EstimationOutput< STATE_SCALAR_TYPE, TIME_TYPE > >,
                 tss::CovarianceAnalysisOutput< STATE_SCALAR_TYPE, TIME_TYPE > >( m,
@@ -1231,6 +1360,16 @@ void expose_estimation_analysis( py::module& m )
 
          :type: int
 
+      )doc" )
+            .def_property_readonly( "cost_history",
+                                    &tss::EstimationOutput< STATE_SCALAR_TYPE, TIME_TYPE >::getCostHistory,
+                                    R"doc(
+
+         **read-only**
+
+         Least-squares cost per iteration. The best iteration is the one with the lowest total cost.
+
+         :type: list[EstimationCost]
       )doc" )
             .def_property_readonly( "inter_arc_continuity_cost_history",
                                     &tss::EstimationOutput< STATE_SCALAR_TYPE, TIME_TYPE >::getInterArcContinuityCostHistory,
