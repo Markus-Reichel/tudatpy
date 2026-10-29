@@ -29,6 +29,10 @@ Functions
 
    cholesky_solver
 
+   sparse_qr_solver
+
+   sparse_cholesky_solver
+
    create_covariance_from_diagonal_entries
 
    add_covariance_diagonal_entries
@@ -59,6 +63,10 @@ Functions
 .. autofunction:: tudatpy.estimation.estimation_analysis.bdc_svd_solver
 
 .. autofunction:: tudatpy.estimation.estimation_analysis.cholesky_solver
+
+.. autofunction:: tudatpy.estimation.estimation_analysis.sparse_qr_solver
+
+.. autofunction:: tudatpy.estimation.estimation_analysis.sparse_cholesky_solver
 
 .. autofunction:: tudatpy.estimation.estimation_analysis.create_covariance_from_diagonal_entries
 

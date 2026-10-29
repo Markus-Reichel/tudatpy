@@ -28,7 +28,8 @@ using namespace linear_algebra;
 
 BOOST_AUTO_TEST_SUITE( test_normal_equations_solver )
 
-//! Test that all solvers give the same solution and inverse as a full-pivoting LU decomposition
+//! Test that all solvers, with a dense and a sparse normal matrix, give the same solution and inverse as a full-pivoting LU
+//! decomposition
 BOOST_AUTO_TEST_CASE( testSolverAgreement )
 {
     // Well-conditioned normal matrix from a random design matrix
@@ -49,7 +50,8 @@ BOOST_AUTO_TEST_CASE( testSolverAgreement )
     }
 
     const Eigen::SparseMatrix< double > sparseNormalMatrix = normalMatrix.sparseView( );
-    for( const auto& solverSettings : { sparseQrSolver( ), sparseCholeskySolver( ) } )
+    for( const auto& solverSettings :
+         { sparseQrSolver( ), sparseCholeskySolver( ), jacobiSvdSolver( ), bdcSvdSolver( ), choleskySolver( ) } )
     {
         auto solver = createNormalEquationsSolver< Eigen::SparseMatrix< double > >( solverSettings );
         solver->factorize( sparseNormalMatrix, TUDAT_NAN );
@@ -79,6 +81,16 @@ BOOST_AUTO_TEST_CASE( testTruncatedSvd )
     {
         auto solver = createNormalEquationsSolver< Eigen::MatrixXd >( solverSettings );
         solver->factorize( normalMatrix, TUDAT_NAN );
+        BOOST_CHECK( Eigen::VectorXd( solver->solve( rightHandSide ) ).isApprox( expectedSolution, 1.0E-12 ) );
+        BOOST_CHECK( solver->inverse( ).isApprox( expectedPseudoInverse, 1.0E-12 ) );
+    }
+
+    // The same truncated SVD of a sparse normal matrix
+    const Eigen::SparseMatrix< double > sparseNormalMatrix = normalMatrix.sparseView( );
+    for( const auto& solverSettings : { jacobiSvdSolver( 1.0E-8 ), bdcSvdSolver( 1.0E-8 ) } )
+    {
+        auto solver = createNormalEquationsSolver< Eigen::SparseMatrix< double > >( solverSettings );
+        solver->factorize( sparseNormalMatrix, TUDAT_NAN );
         BOOST_CHECK( Eigen::VectorXd( solver->solve( rightHandSide ) ).isApprox( expectedSolution, 1.0E-12 ) );
         BOOST_CHECK( solver->inverse( ).isApprox( expectedPseudoInverse, 1.0E-12 ) );
     }

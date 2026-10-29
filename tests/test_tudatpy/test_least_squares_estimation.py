@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from tudatpy.dynamics import environment_setup, parameters_setup, propagation_setup
 from tudatpy.estimation import estimation_analysis
@@ -58,7 +59,7 @@ def _create_estimation():
         bodies,
     )
 
-    def estimate(solver_settings):
+    def estimate(solver_settings, sparse_design_matrix=False):
         parameter_set.parameter_vector = initial_state + np.array(
             [100.0, 100.0, 100.0, 0.1, 0.1, 0.1]
         )
@@ -67,25 +68,37 @@ def _create_estimation():
         )
         estimation_input.define_estimation_settings(print_output_to_terminal=False)
         estimation_input.normal_equations_solver_settings = solver_settings
+        estimation_input.sparse_design_matrix = sparse_design_matrix
         return estimation_input, estimator.perform_estimation(estimation_input)
 
     return estimate
 
 
-def test_cholesky_solver_matches_default():
-    """Check that an estimation with the Cholesky solver gives the same estimate and covariance as the default solver."""
+@pytest.mark.parametrize(
+    "solver_name, sparse_design_matrix",
+    [
+        ("cholesky_solver", False),
+        ("sparse_qr_solver", True),
+        ("sparse_cholesky_solver", True),
+        ("bdc_svd_solver", True),
+        ("cholesky_solver", True),
+    ],
+)
+def test_solver_matches_default(solver_name, sparse_design_matrix):
+    """Check that a solver, with a dense or sparse design matrix, gives the same estimate and covariance as the default
+    solver with a dense design matrix."""
 
     estimate = _create_estimation()
     _, reference = estimate(None)
-    _, cholesky = estimate(estimation_analysis.cholesky_solver())
+    _, output = estimate(getattr(estimation_analysis, solver_name)(), sparse_design_matrix)
 
     # Compare the estimates relative to their formal errors, since some state components are zero
     estimate_difference = (
-        cholesky.final_parameters - reference.final_parameters
+        output.final_parameters - reference.final_parameters
     ) / reference.formal_errors
     assert np.max(np.abs(estimate_difference)) < 1.0e-6
-    assert np.allclose(cholesky.formal_errors, reference.formal_errors, rtol=1.0e-8, atol=0.0)
-    assert np.allclose(cholesky.correlations, reference.correlations, rtol=0.0, atol=1.0e-8)
+    assert np.allclose(output.formal_errors, reference.formal_errors, rtol=1.0e-8, atol=0.0)
+    assert np.allclose(output.correlations, reference.correlations, rtol=0.0, atol=1.0e-8)
 
 
 def test_cost_history():

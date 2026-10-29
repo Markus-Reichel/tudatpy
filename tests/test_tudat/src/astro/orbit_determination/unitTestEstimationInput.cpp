@@ -624,7 +624,9 @@ BOOST_AUTO_TEST_CASE( testSolverChoiceInEstimation )
         { linear_algebra::bdcSvdSolver( ), false },
         { linear_algebra::choleskySolver( ), false },
         { nullptr, true },
-        { linear_algebra::sparseCholeskySolver( ), true }
+        { linear_algebra::sparseCholeskySolver( ), true },
+        { linear_algebra::bdcSvdSolver( ), true },
+        { linear_algebra::choleskySolver( ), true }
     };
     for( const auto& solverCase : solverCases )
     {

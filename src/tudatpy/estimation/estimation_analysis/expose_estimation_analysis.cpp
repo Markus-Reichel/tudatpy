@@ -210,8 +210,10 @@ void expose_estimation_analysis( py::module& m )
          Class defining which decomposition is used to solve the normal equations of an estimation.
 
          Instances of this class are created with the :func:`~tudatpy.estimation.estimation_analysis.jacobi_svd_solver`,
-         :func:`~tudatpy.estimation.estimation_analysis.bdc_svd_solver` and
-         :func:`~tudatpy.estimation.estimation_analysis.cholesky_solver` functions.
+         :func:`~tudatpy.estimation.estimation_analysis.bdc_svd_solver`,
+         :func:`~tudatpy.estimation.estimation_analysis.cholesky_solver`,
+         :func:`~tudatpy.estimation.estimation_analysis.sparse_qr_solver` and
+         :func:`~tudatpy.estimation.estimation_analysis.sparse_cholesky_solver` functions.
 
       )doc" );
 
@@ -222,8 +224,9 @@ void expose_estimation_analysis( py::module& m )
 
  Function for creating settings for a Jacobi SVD solver of the normal equations.
 
- This is the default solver. It is robust but slow for many parameters. With a cutoff, singular values smaller than the
- cutoff times the largest singular value (of the normalized normal matrix) are ignored, giving a truncated SVD.
+ This is the default solver for a dense design matrix. It is robust but slow for many parameters. With a cutoff, singular
+ values smaller than the cutoff times the largest singular value (of the normalized normal matrix) are ignored, giving a
+ truncated SVD. With a sparse design matrix, a dense copy of the normal matrix is factorized.
 
  Parameters
  ----------
@@ -264,7 +267,40 @@ void expose_estimation_analysis( py::module& m )
  Function for creating settings for a Cholesky solver of the normal equations.
 
  The fastest solver, for well-conditioned problems. The estimation stops with an error if the normal matrix is not
- positive definite. It cannot be used together with linear constraints.
+ positive definite. It cannot be used together with linear constraints. With a sparse design matrix, a dense copy of
+ the normal matrix is factorized.
+
+ Returns
+ -------
+ :class:`~tudatpy.estimation.estimation_analysis.NormalEquationsSolverSettings`
+     Settings of the solver.
+
+     )doc" );
+
+    m.def( "sparse_qr_solver",
+           &tla::sparseQrSolver,
+           R"doc(
+
+ Function for creating settings for a sparse QR solver of the normal equations.
+
+ This is the default solver for a sparse design matrix (see ``CovarianceAnalysisInput.sparse_design_matrix``). It also
+ works with linear constraints. It requires a sparse design matrix.
+
+ Returns
+ -------
+ :class:`~tudatpy.estimation.estimation_analysis.NormalEquationsSolverSettings`
+     Settings of the solver.
+
+     )doc" );
+
+    m.def( "sparse_cholesky_solver",
+           &tla::sparseCholeskySolver,
+           R"doc(
+
+ Function for creating settings for a sparse Cholesky (LDLT) solver of the normal equations.
+
+ The fastest solver for a large sparse normal matrix. It requires a sparse design matrix
+ (see ``CovarianceAnalysisInput.sparse_design_matrix``) and cannot be used together with linear constraints.
 
  Returns
  -------
@@ -520,9 +556,20 @@ void expose_estimation_analysis( py::module& m )
                            &tss::CovarianceAnalysisInput< STATE_SCALAR_TYPE, TIME_TYPE >::setNormalEquationsSolverSettings,
                            R"doc(
 
-         Settings of the solver of the normal equations. None (the default) uses a Jacobi SVD.
+         Settings of the solver of the normal equations. None (the default) uses a Jacobi SVD for a dense design matrix and a
+         sparse QR decomposition for a sparse design matrix.
 
          :type: NormalEquationsSolverSettings
+      )doc" )
+            .def_property( "sparse_design_matrix",
+                           &tss::CovarianceAnalysisInput< STATE_SCALAR_TYPE, TIME_TYPE >::getSparseDesignMatrix,
+                           &tss::CovarianceAnalysisInput< STATE_SCALAR_TYPE, TIME_TYPE >::setSparseDesignMatrix,
+                           R"doc(
+
+         Whether the design matrix is stored as a sparse matrix (default False). This saves memory when most observations
+         depend on only a few parameters.
+
+         :type: bool
       )doc" );
 
     py::class_< tss::EstimationInput< STATE_SCALAR_TYPE, TIME_TYPE >,
