@@ -134,7 +134,8 @@ public:
     /*!
      * \param outlierRejectionType Algorithm implemented by the derived class, used for logging and error messages.
      * \param observationDataset Dataset holding the observations of the estimation. Observations that are already
-     * rejected in this dataset (for instance by the user, before the estimation) start out as rejected.
+     * rejected in this dataset start out as rejected. Only those rejected by the same algorithm, in an earlier estimation,
+     * can be recovered.
      */
     OutlierRejection(
             const OutlierRejectionType outlierRejectionType,
@@ -156,10 +157,11 @@ public:
         {
             const unsigned int observationId = observationIds_.at( observationIndex );
             indexByObservationId_.emplace( observationId, observationIndex );
-            isRejected_.at( observationIndex ) = !observationDataset_->getObservationRow( observationId ).isActive_;
+            const auto& row = observationDataset_->getObservationRow( observationId );
+            isRejected_.at( observationIndex ) = !row.isActive_;
+            isDisabled_.push_back( !row.isActive_ && row.rejectionReason_ != getOutlierRejectionTypeString( outlierRejectionType_ ) );
         }
-        isDisabled_ = isRejected_;
-        numberOfDisabledObservations_ = getNumberOfRejectedObservations( );
+        numberOfDisabledObservations_ = std::count( isDisabled_.begin( ), isDisabled_.end( ), true );
     }
 
     //! Destructor
@@ -223,13 +225,19 @@ protected:
     void applyRejectionStatusToObservationDataset( )
     {
         // Condition that selects exactly those observations that this object has marked as rejected. The condition is
-        // evaluated by the dataset for each of its observations in turn.
+        // evaluated by the dataset for each of its observations in turn. Observations that were disabled at the start keep
+        // their rejection reason.
         const observation_models::ObservationSelectionCondition< ObservationScalarType, TimeType > isRejectedCondition(
                 [ this ]( const observation_models::ObservationDataset< ObservationScalarType, TimeType >&, const int observationId ) {
                     return isRejected_.at( indexByObservationId_.at( observationId ) );
                 } );
+        const observation_models::ObservationSelectionCondition< ObservationScalarType, TimeType > isDisabledCondition(
+                [ this ]( const observation_models::ObservationDataset< ObservationScalarType, TimeType >&, const int observationId ) {
+                    return isDisabled_.at( indexByObservationId_.at( observationId ) );
+                } );
 
-        observationDataset_->rejectObservations( isRejectedCondition, getOutlierRejectionTypeString( outlierRejectionType_ ) );
+        observationDataset_->rejectObservations( isRejectedCondition && !isDisabledCondition,
+                                                 getOutlierRejectionTypeString( outlierRejectionType_ ) );
         observationDataset_->restoreObservations( !isRejectedCondition );
     }
 

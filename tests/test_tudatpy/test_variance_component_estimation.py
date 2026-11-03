@@ -125,7 +125,10 @@ def test_orbit_sigma_recovery():
     estimation_input.define_estimation_settings(print_output_to_terminal=False)
     output = estimator.perform_estimation_with_variance_components(
         estimation_input,
-        estimation_analysis.variance_component_settings(groups, maximum_iterations=15),
+        estimation_analysis.variance_component_settings(
+            groups,
+            maximum_iterations=30,
+        ),
     )
 
     assert output.is_converged

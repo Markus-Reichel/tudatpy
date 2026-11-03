@@ -114,6 +114,22 @@ Functions
 
 .. autofunction:: tudatpy.estimation.estimation_analysis.compute_variance_components
 
+Enumerations
+------------
+.. currentmodule:: tudatpy.estimation.estimation_analysis
+
+.. autosummary::
+
+   VarianceComponentEstimatorType
+
+
+
+.. autoclass:: tudatpy.estimation.estimation_analysis.VarianceComponentEstimatorType
+   :members:
+
+
+
+
 Classes
 -------
 .. currentmodule:: tudatpy.estimation.estimation_analysis

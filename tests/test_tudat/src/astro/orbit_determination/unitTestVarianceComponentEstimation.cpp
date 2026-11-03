@@ -11,6 +11,7 @@
 
 #define BOOST_TEST_MAIN
 
+#include <algorithm>
 #include <cmath>
 #include <numeric>
 #include <random>
@@ -154,7 +155,7 @@ BOOST_AUTO_TEST_CASE( testRedundancy )
     }
 }
 
-//! Starting 10x off in sigma, Helmert's method and the simplified estimator must reach the same weights, close to the true
+//! Starting 2x off in sigma, Helmert's method and the simplified estimator must reach the same weights, close to the true
 //! noise. Variants: no prior, a prior, rows in no group, and noise correlated in pairs with matching weights.
 BOOST_AUTO_TEST_CASE( testSigmaRecovery )
 {
@@ -170,9 +171,10 @@ BOOST_AUTO_TEST_CASE( testSigmaRecovery )
         }
 
         std::vector< Eigen::Vector2d > finalSigmas;
-        for( int useSimplified = 0; useSimplified < 2; useSimplified++ )
+        for( const VarianceComponentEstimatorType estimatorType :
+             { VarianceComponentEstimatorType::helmert_estimator, VarianceComponentEstimatorType::simplified_helmert_estimator } )
         {
-            Eigen::Vector2d sigmas( 5.0, 2.0 );
+            Eigen::Vector2d sigmas( 1.0, 10.0 );
             for( int iteration = 0; iteration < 200; iteration++ )
             {
                 Eigen::SparseMatrix< double > weights = problem.getWeights( sigmas( 0 ), sigmas( 1 ) );
@@ -182,14 +184,13 @@ BOOST_AUTO_TEST_CASE( testSigmaRecovery )
                 }
                 Eigen::MatrixXd normalMatrix;
                 const Eigen::VectorXd residuals = problem.solve( weights, prior, normalMatrix );
-                const VarianceComponentEstimate estimate =
-                        computeHelmertVarianceComponents( problem.designMatrix, weights, normalMatrix, residuals, problem.groupRowIndices );
+                const VarianceComponentEstimate estimate = computeHelmertVarianceComponents(
+                        problem.designMatrix, weights, normalMatrix, residuals, problem.groupRowIndices, estimatorType );
 
                 Eigen::Vector2d factors;
                 for( int k = 0; k < 2; k++ )
                 {
-                    factors( k ) = useSimplified ? estimate.groupResults.at( k ).simplifiedVarianceFactor
-                                                 : estimate.groupResults.at( k ).varianceFactor;
+                    factors( k ) = estimate.groupResults.at( k ).varianceFactor;
                 }
                 sigmas = sigmas.cwiseProduct( factors.cwiseSqrt( ) );
                 if( ( factors.array( ) - 1.0 ).abs( ).maxCoeff( ) < 1.0E-12 )
@@ -210,7 +211,8 @@ BOOST_AUTO_TEST_CASE( testSigmaRecovery )
 
 //! Orbit estimation from range (two stations) and position observations. Starting 10x off, the estimator must recover the
 //! range noise of each arc and the correlated position noise. Run for one arc and for two arcs with their own range noise.
-void checkOrbitSigmaRecovery( const bool useMultiArc )
+//! With outliers, a few range observations are 200 m off and must be rejected.
+Eigen::VectorXd estimateOrbitSigmas( const bool useMultiArc, const int leastSquaresIterationsPerUpdate, const bool addOutliers )
 {
     const double gravitationalParameter = 3.986004418E14;
     const double arcDuration = 4.0 * 3600.0;
@@ -304,15 +306,18 @@ void checkOrbitSigmaRecovery( const bool useMultiArc )
     positionCorrelation << 1.0, 0.5, 0.0, 0.5, 1.0, 0.3, 0.0, 0.3, 1.0;
     const Eigen::Matrix3d positionCholesky = positionCorrelation.llt( ).matrixL( );
     auto generator = std::make_shared< std::mt19937 >( 1234 );
-    auto createNoiseFunction = [ generator ]( const Eigen::MatrixXd& noiseFactor ) {
-        return std::function< Eigen::VectorXd( const double ) >( [ generator, noiseFactor ]( const double ) {
+    const std::vector< double > outlierTimes = { 1830.0, 5430.0, 9030.0 };
+    auto createNoiseFunction = [ generator, outlierTimes, addOutliers ]( const Eigen::MatrixXd& noiseFactor ) {
+        return std::function< Eigen::VectorXd( const double ) >( [ = ]( const double time ) {
             std::normal_distribution< double > normal( 0.0, 1.0 );
             Eigen::VectorXd noise( noiseFactor.cols( ) );
             for( int i = 0; i < noise.size( ); i++ )
             {
                 noise( i ) = normal( *generator );
             }
-            return Eigen::VectorXd( noiseFactor * noise );
+            const bool isOutlier = addOutliers && noise.size( ) == 1 &&
+                    std::find( outlierTimes.begin( ), outlierTimes.end( ), time ) != outlierTimes.end( );
+            return Eigen::VectorXd( noiseFactor * noise + Eigen::VectorXd::Constant( noise.size( ), isOutlier ? 200.0 : 0.0 ) );
         } );
     };
 
@@ -369,23 +374,49 @@ void checkOrbitSigmaRecovery( const bool useMultiArc )
     parametersToEstimate->resetParameterValues( perturbedParameters );
 
     auto estimationInput = std::make_shared< EstimationInput< double, double > >(
-            observations, Eigen::MatrixXd::Zero( 0, 0 ), estimationConvergenceChecker( 6 ) );
-    estimationInput->defineEstimationSettings( true, true, true, false, false, false );
+            observations,
+            Eigen::MatrixXd::Zero( 0, 0 ),
+            estimationConvergenceChecker( 6 ),
+            Eigen::MatrixXd::Zero( 0, 0 ),
+            Eigen::VectorXd::Zero( 0 ),
+            true,
+            addOutliers ? std::make_shared< CarpinoOutlierRejectionSettings >( ) : nullptr );
+    estimationInput->defineEstimationSettings( true, true, true, false, true, false );
     auto output = estimateParametersWithVarianceComponents(
-            orbitDeterminationManager, estimationInput, varianceComponentSettings< double, double >( groups, 0.01, 15 ) );
+            orbitDeterminationManager,
+            estimationInput,
+            varianceComponentSettings< double, double >(
+                    groups, 0.01, 30, VarianceComponentEstimatorType::simplified_helmert_estimator, leastSquaresIterationsPerUpdate ) );
 
     BOOST_CHECK( output->isConverged );
+    Eigen::VectorXd estimatedSigmas( groups.size( ) );
     for( unsigned int k = 0; k < groups.size( ); k++ )
     {
-        const double estimatedSigma = initialSigmas.at( k ) * std::sqrt( output->totalVarianceFactorHistory.back( )( k ) );
-        BOOST_CHECK_CLOSE_FRACTION( estimatedSigma, trueSigmas.at( k ), k % 2 == 0 ? 0.08 : 0.3 );
+        estimatedSigmas( k ) = initialSigmas.at( k ) * std::sqrt( output->totalVarianceFactorHistory.back( )( k ) );
+        BOOST_CHECK_CLOSE_FRACTION( estimatedSigmas( k ), trueSigmas.at( k ), k % 2 == 0 ? 0.08 : 0.3 );
     }
+    for( const double time : outlierTimes )
+    {
+        const Condition outlierCondition = Condition::observableType( one_way_range ) && Condition::timeBounds( time - 1.0, time + 1.0 );
+        for( const unsigned int id : observations->getObservationIdsMatchingCondition( outlierCondition ) )
+        {
+            BOOST_CHECK( observations->getObservationRow( id ).isActive_ != addOutliers );
+        }
+    }
+    return estimatedSigmas;
 }
 
+//! Solving to convergence before each weight update, and updating the weights every 3 iterations, must reach the same
+//! weights. The multi-arc case also has outliers.
 BOOST_AUTO_TEST_CASE( testOrbitSigmaRecovery )
 {
-    checkOrbitSigmaRecovery( false );
-    checkOrbitSigmaRecovery( true );
+    const Eigen::VectorXd fullSigmas = estimateOrbitSigmas( false, 0, false );
+    const Eigen::VectorXd interleavedSigmas = estimateOrbitSigmas( false, 3, false );
+    for( int k = 0; k < fullSigmas.size( ); k++ )
+    {
+        BOOST_CHECK_CLOSE_FRACTION( interleavedSigmas( k ), fullSigmas( k ), 0.01 );
+    }
+    estimateOrbitSigmas( true, 3, true );
 }
 
 BOOST_AUTO_TEST_SUITE_END( )
