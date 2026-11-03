@@ -79,20 +79,20 @@ struct VarianceComponentEstimate {
 /*!
  * Estimates one variance factor per group from one least-squares solution, with Helmert's equations (Sahin et al., 1992,
  * Eq. 19) or the simplified estimator. Parts of the normal matrix that belong to no group, such as a priori information,
- * keep a factor of 1. Weight correlations are only allowed within a group. The design matrix and normal matrix may be
+ * keep a factor of 1. Weight correlations are only allowed within a group. The design matrix and covariance may be
  * normalized, as long as both use the same normalization.
- * \param designMatrix Design matrix, one row per observation
+ * \param designMatrix Sparse design matrix, one row per observation
  * \param weightsMatrix Observation weight matrix
- * \param normalMatrix Full normal matrix (inverse covariance) of the solution
+ * \param covarianceMatrix Covariance of the solution, the inverse of the full normal matrix
  * \param residuals Post-fit residuals
  * \param groupRowIndices Rows of each group
  * \param estimatorType Method used to compute the variance factors
  * \return Variance factor and related values per group
  */
 VarianceComponentEstimate computeHelmertVarianceComponents(
-        const Eigen::MatrixXd& designMatrix,
+        const Eigen::SparseMatrix< double >& designMatrix,
         const Eigen::SparseMatrix< double >& weightsMatrix,
-        const Eigen::MatrixXd& normalMatrix,
+        const Eigen::MatrixXd& covarianceMatrix,
         const Eigen::VectorXd& residuals,
         const std::vector< std::vector< int > >& groupRowIndices,
         const VarianceComponentEstimatorType estimatorType = VarianceComponentEstimatorType::simplified_helmert_estimator );
@@ -227,7 +227,7 @@ VarianceComponentEstimate computeHelmertVarianceComponents(
             observationDataset->createOrderedObservationVectorData( true );
     const int bestIteration = estimationOutput->bestIteration_;
     if( !estimationOutput->designMatrixSaved_ ||
-        estimationOutput->getNormalizedInverseCovarianceMatrix( ).rows( ) != estimationOutput->getNormalizedDesignMatrix( ).cols( ) ||
+        estimationOutput->normalizedCovarianceMatrix_.rows( ) != estimationOutput->designMatrixTransformationDiagonal_.rows( ) ||
         static_cast< int >( estimationOutput->activeFlagsPerIteration_.size( ) ) <= bestIteration ||
         estimationOutput->activeFlagsPerIteration_.at( bestIteration ).rows( ) != allRows.getWeightVector( ).rows( ) )
     {
@@ -255,9 +255,9 @@ VarianceComponentEstimate computeHelmertVarianceComponents(
                 "Error when computing variance components: the observation weights differ from those used in the estimation." );
     }
 
-    return computeHelmertVarianceComponents( estimationOutput->getNormalizedDesignMatrix( ),
+    return computeHelmertVarianceComponents( estimationOutput->getNormalizedDesignMatrixSparse( ),
                                              estimationOutput->getWeightsMatrix( ),
-                                             estimationOutput->getNormalizedInverseCovarianceMatrix( ),
+                                             estimationOutput->getNormalizedCovarianceMatrix( ),
                                              estimationOutput->residuals_,
                                              getVarianceComponentGroupRows( rowObservationIds, observationDataset, groups ),
                                              estimatorType );

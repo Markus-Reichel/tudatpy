@@ -124,8 +124,8 @@ BOOST_AUTO_TEST_CASE( testRedundancy )
     const Eigen::MatrixXd prior = Eigen::VectorXd::LinSpaced( 6, 1.0, 50.0 ).asDiagonal( );
     Eigen::MatrixXd normalMatrix;
     const Eigen::VectorXd residuals = problem.solve( weights, prior, normalMatrix );
-    const VarianceComponentEstimate estimate =
-            computeHelmertVarianceComponents( problem.designMatrix, weights, normalMatrix, residuals, problem.groupRowIndices );
+    const VarianceComponentEstimate estimate = computeHelmertVarianceComponents(
+            problem.designMatrix.sparseView( ), weights, normalMatrix.inverse( ), residuals, problem.groupRowIndices );
 
     const Eigen::VectorXd redundancyNumbers = Eigen::VectorXd::Ones( 500 ) -
             ( weights * problem.designMatrix * normalMatrix.inverse( ) * problem.designMatrix.transpose( ) ).diagonal( );
@@ -143,9 +143,9 @@ BOOST_AUTO_TEST_CASE( testRedundancy )
 
     const Eigen::VectorXd scaling = Eigen::VectorXd::LinSpaced( 6, 1.0E-4, 1.0E4 );
     const VarianceComponentEstimate scaledEstimate =
-            computeHelmertVarianceComponents( problem.designMatrix * scaling.asDiagonal( ),
+            computeHelmertVarianceComponents( ( problem.designMatrix * scaling.asDiagonal( ) ).sparseView( ),
                                               weights,
-                                              scaling.asDiagonal( ) * normalMatrix * scaling.asDiagonal( ),
+                                              ( scaling.asDiagonal( ) * normalMatrix * scaling.asDiagonal( ) ).inverse( ),
                                               residuals,
                                               problem.groupRowIndices );
     for( int k = 0; k < 2; k++ )
@@ -184,8 +184,12 @@ BOOST_AUTO_TEST_CASE( testSigmaRecovery )
                 }
                 Eigen::MatrixXd normalMatrix;
                 const Eigen::VectorXd residuals = problem.solve( weights, prior, normalMatrix );
-                const VarianceComponentEstimate estimate = computeHelmertVarianceComponents(
-                        problem.designMatrix, weights, normalMatrix, residuals, problem.groupRowIndices, estimatorType );
+                const VarianceComponentEstimate estimate = computeHelmertVarianceComponents( problem.designMatrix.sparseView( ),
+                                                                                             weights,
+                                                                                             normalMatrix.inverse( ),
+                                                                                             residuals,
+                                                                                             problem.groupRowIndices,
+                                                                                             estimatorType );
 
                 Eigen::Vector2d factors;
                 for( int k = 0; k < 2; k++ )
