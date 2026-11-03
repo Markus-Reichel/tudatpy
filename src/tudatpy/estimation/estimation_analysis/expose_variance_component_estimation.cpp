@@ -33,6 +33,20 @@ void expose_variance_component_estimation( py::module& m )
     using Output = tss::VarianceComponentEstimationOutput< STATE_SCALAR_TYPE, TIME_TYPE >;
     using Condition = tom::ObservationSelectionCondition< STATE_SCALAR_TYPE, TIME_TYPE >;
 
+    py::enum_< tss::VarianceComponentEstimatorType >( m, "VarianceComponentEstimatorType", R"doc(
+
+         Methods to estimate the variance factor of each group of observations.
+
+      )doc" )
+            .value( "helmert_estimator",
+                    tss::VarianceComponentEstimatorType::helmert_estimator,
+                    "Helmert's equations, which couple the groups (Sahin et al., 1992, Eq. 19). They can give factors that are "
+                    "not positive when the starting weights are far off." )
+            .value( "simplified_helmert_estimator",
+                    tss::VarianceComponentEstimatorType::simplified_helmert_estimator,
+                    "Weighted square sum of each group divided by its redundancy (Foerstner, 1979). Its factors are always positive." )
+            .export_values( );
+
     py::class_< Settings, std::shared_ptr< Settings > >( m, "VarianceComponentSettings", R"doc(
 
          Settings for estimating the weight of each group of observations, created with :func:`variance_component_settings`.
@@ -44,6 +58,8 @@ void expose_variance_component_estimation( py::module& m )
            py::arg( "groups" ),
            py::arg( "tolerance" ) = 0.01,
            py::arg( "maximum_iterations" ) = 10,
+           py::arg( "estimator_type" ) = tss::VarianceComponentEstimatorType::simplified_helmert_estimator,
+           py::arg( "least_squares_iterations_per_update" ) = 3,
            R"doc(
 
          Function to create settings for estimating the weight of each group of observations with Helmert's method
@@ -58,6 +74,11 @@ void expose_variance_component_estimation( py::module& m )
              The iteration stops when all variance factors differ from 1 by less than this value.
          maximum_iterations : int, default = 10
              Maximum number of least-squares estimations.
+         estimator_type : :class:`VarianceComponentEstimatorType`, default = ``simplified_helmert_estimator``
+             Method used to compute the variance factors.
+         least_squares_iterations_per_update : int, default = 3
+             Number of least-squares iterations between two weight updates. Only the final estimation runs to convergence.
+             With 0, each estimation runs to convergence.
 
          Returns
          -------
@@ -93,10 +114,7 @@ void expose_variance_component_estimation( py::module& m )
 
       )doc" )
             .def_readonly(
-                    "group_results", &tss::VarianceComponentEstimate::groupResults, "Results per group, in the order of the groups." )
-            .def_readonly( "simplified_estimator_used",
-                           &tss::VarianceComponentEstimate::simplifiedEstimatorUsed,
-                           "Whether the simplified estimator was used, because Helmert's equations gave a non-positive factor." );
+                    "group_results", &tss::VarianceComponentEstimate::groupResults, "Results per group, in the order of the groups." );
 
     py::class_< Output, std::shared_ptr< Output > >( m, "VarianceComponentEstimationOutput", R"doc(
 
@@ -117,13 +135,15 @@ void expose_variance_component_estimation( py::module& m )
             "compute_variance_components",
             []( const std::shared_ptr< tss::EstimationOutput< STATE_SCALAR_TYPE, TIME_TYPE > > estimationOutput,
                 const std::shared_ptr< tom::ObservationDataset< STATE_SCALAR_TYPE, TIME_TYPE > > observationDataset,
-                const std::vector< Condition >& groups ) {
+                const std::vector< Condition >& groups,
+                const tss::VarianceComponentEstimatorType estimatorType ) {
                 return tss::computeHelmertVarianceComponents< STATE_SCALAR_TYPE, TIME_TYPE >(
-                        estimationOutput, observationDataset, groups );
+                        estimationOutput, observationDataset, groups, estimatorType );
             },
             py::arg( "estimation_output" ),
             py::arg( "observation_dataset" ),
             py::arg( "groups" ),
+            py::arg( "estimator_type" ) = tss::VarianceComponentEstimatorType::simplified_helmert_estimator,
             R"doc(
 
          Function to estimate the variance factor of each group of observations from one estimation, without changing any weights.
@@ -131,11 +151,13 @@ void expose_variance_component_estimation( py::module& m )
          Parameters
          ----------
          estimation_output : :class:`EstimationOutput`
-             Output of the estimation, with the design matrix saved.
+             Output of the estimation, with the design matrix and the iteration history saved.
          observation_dataset : :class:`~tudatpy.estimation.observations.ObservationDataset`
-             Observations, with the same active observations and weights as in the estimation.
+             Observations, with the same weights as in the estimation.
          groups : list[ObservationSelectionCondition]
              One condition per group.
+         estimator_type : :class:`VarianceComponentEstimatorType`, default = ``simplified_helmert_estimator``
+             Method used to compute the variance factors.
 
          Returns
          -------

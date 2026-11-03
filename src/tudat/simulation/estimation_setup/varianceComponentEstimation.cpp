@@ -29,7 +29,8 @@ VarianceComponentEstimate computeHelmertVarianceComponents( const Eigen::MatrixX
                                                             const Eigen::SparseMatrix< double >& weightsMatrix,
                                                             const Eigen::MatrixXd& normalMatrix,
                                                             const Eigen::VectorXd& residuals,
-                                                            const std::vector< std::vector< int > >& groupRowIndices )
+                                                            const std::vector< std::vector< int > >& groupRowIndices,
+                                                            const VarianceComponentEstimatorType estimatorType )
 {
     const int numberOfObservations = designMatrix.rows( );
     const int numberOfGroups = groupRowIndices.size( );
@@ -96,11 +97,15 @@ VarianceComponentEstimate computeHelmertVarianceComponents( const Eigen::MatrixX
         groupResult.rmsResidual = std::sqrt( groupResiduals.squaredNorm( ) / rows.size( ) );
         groupResult.redundancy = groupResult.numberOfObservations - solvedGroupNormalMatrices.at( k ).trace( );
         groupResult.isFrozen = groupResult.redundancy < 1.0;
-        groupResult.simplifiedVarianceFactor = groupResult.isFrozen ? 1.0 : groupResult.weightedSquareSum / groupResult.redundancy;
         if( !groupResult.isFrozen )
         {
+            groupResult.varianceFactor = groupResult.weightedSquareSum / groupResult.redundancy;
             fixedNormalMatrix -= groupNormalMatrix;
         }
+    }
+    if( estimatorType == VarianceComponentEstimatorType::simplified_helmert_estimator )
+    {
+        return estimate;
     }
 
     // Helmert's equations, for the groups that are not frozen. The rest of the normal matrix (a priori information,
@@ -133,13 +138,16 @@ VarianceComponentEstimate computeHelmertVarianceComponents( const Eigen::MatrixX
     }
     const Eigen::VectorXd helmertVarianceFactors = helmertMatrix.colPivHouseholderQr( ).solve( rightHandSide );
 
-    // Helmert's method does not keep the factors positive. Then the simplified estimator of Foerstner (1979) is used, which
-    // converges to the same factors.
-    estimate.simplifiedEstimatorUsed = !( helmertVarianceFactors.array( ) > 0.0 ).all( ) || !helmertVarianceFactors.allFinite( );
+    // Helmert's method does not keep the factors positive, for instance when the starting weights are far off.
+    if( !( helmertVarianceFactors.array( ) > 0.0 ).all( ) || !helmertVarianceFactors.allFinite( ) )
+    {
+        throw std::runtime_error(
+                "Error when computing variance components: Helmert's equations gave a variance factor that is not positive. The "
+                "simplified Helmert estimator always gives positive factors." );
+    }
     for( int i = 0; i < numberOfActiveGroups; i++ )
     {
-        VarianceComponentGroupResult& groupResult = estimate.groupResults.at( activeGroups.at( i ) );
-        groupResult.varianceFactor = estimate.simplifiedEstimatorUsed ? groupResult.simplifiedVarianceFactor : helmertVarianceFactors( i );
+        estimate.groupResults.at( activeGroups.at( i ) ).varianceFactor = helmertVarianceFactors( i );
     }
     return estimate;
 }

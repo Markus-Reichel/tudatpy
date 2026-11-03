@@ -227,13 +227,15 @@ void expose_estimation_analysis_estimator( py::module& m )
 
          Follows `Sahin et al. (1992) <https://doi.org/10.1007/BF02033189>`_: estimate the parameters, estimate a variance
          factor per group with Helmert's method, divide the group weights by it, and repeat until all factors are close to 1.
-         The weights in the observations of ``estimation_input`` end up as the estimated weights.
+         The weights are updated after a few least-squares iterations, and only the final estimation runs to convergence.
+         Outlier rejection runs inside each estimation. The weights in the observations of ``estimation_input`` end up as the
+         estimated weights.
 
          Parameters
          ----------
          estimation_input : :class:`~tudatpy.estimation.estimation_analysis.EstimationInput`
-             Input to the estimation, with the starting weights. The design matrix must be saved, and linear parameter
-             constraints and outlier rejection are not supported.
+             Input to the estimation, with the starting weights. The design matrix and the iteration history must be saved,
+             and linear parameter constraints are not supported.
          variance_component_settings : :class:`~tudatpy.estimation.estimation_analysis.VarianceComponentSettings`
              Groups and iteration settings.
 
