@@ -746,6 +746,69 @@ BOOST_AUTO_TEST_CASE( test_ChiSquaredCalculation )
     BOOST_CHECK_CLOSE_FRACTION( chiSquaredAcceptedObservation, expectedChiSquaredAcceptedObservation, 1E-12 );
 }
 
+//! The chi-squared value of each observation, computed from the non-zero columns of its rows in a dense or a sparse design
+//! matrix, must equal the value from its full rows and the full parameter covariance.
+BOOST_AUTO_TEST_CASE( test_ChiSquaredFromNonZeroColumns )
+{
+    const std::shared_ptr< ObservationDataset< double, double > > dataset = createTestDataset( );
+    const ObservationVectorData< double, double > flattenedData = dataset->createOrderedObservationVectorData( true );
+    const Eigen::VectorXd residuals = flattenedData.getResidualVector( );
+
+    // Each row depends on two or three of the six parameters.
+    const int numberOfParameters = 6;
+    Eigen::MatrixXd designMatrix = Eigen::MatrixXd::Zero( residuals.rows( ), numberOfParameters );
+    for( int row = 0; row < designMatrix.rows( ); row++ )
+    {
+        designMatrix( row, row % numberOfParameters ) = 1.0 + row;
+        designMatrix( row, ( 2 * row + 1 ) % numberOfParameters ) = 0.5 - row;
+        if( row % 2 == 0 )
+        {
+            designMatrix( row, numberOfParameters - 1 ) = 0.3;
+        }
+    }
+    const Eigen::MatrixXd randomMatrix = Eigen::MatrixXd::Random( numberOfParameters, numberOfParameters );
+    const Eigen::MatrixXd parameterCovariance =
+            0.1 * randomMatrix * randomMatrix.transpose( ) + Eigen::MatrixXd::Identity( numberOfParameters, numberOfParameters );
+    const Eigen::VectorXd parameterCorrection = Eigen::VectorXd::LinSpaced( numberOfParameters, -0.2, 0.3 );
+
+    TestableCarpinoOutlierRejection outlierRejection( std::make_shared< CarpinoOutlierRejectionSettings >( ), dataset );
+    const Eigen::SparseMatrix< double > sparseDesignMatrix = designMatrix.sparseView( );
+    const OutlierRejectionInput< double, double > denseInput(
+            1, flattenedData, residuals, designMatrix, parameterCovariance, parameterCorrection );
+    const OutlierRejectionInput< double, double > sparseInput(
+            1, flattenedData, residuals, sparseDesignMatrix, parameterCovariance, parameterCorrection );
+
+    for( const unsigned int observationId : dataset->getObservationIds( ) )
+    {
+        const int firstRow = flattenedData.getFirstVectorRowForObservation( observationId );
+        const int numberOfRows = flattenedData.getScalarSizeForObservation( observationId );
+        const Eigen::VectorXd observationResiduals = residuals.segment( firstRow, numberOfRows );
+        const Eigen::MatrixXd observationCovariance = flattenedData.getInverseWeightMatrixForObservation( observationId );
+        for( const bool isRejected : { false, true } )
+        {
+            const double expectedChiSquared = outlierRejection.computeChiSquared( designMatrix.middleRows( firstRow, numberOfRows ),
+                                                                                  observationResiduals,
+                                                                                  parameterCorrection,
+                                                                                  parameterCovariance,
+                                                                                  observationCovariance,
+                                                                                  isRejected );
+            for( const OutlierRejectionInput< double, double >* input : { &denseInput, &sparseInput } )
+            {
+                std::vector< int > columns;
+                const Eigen::MatrixXd partials = input->getDesignMatrixBlock( observationId, columns );
+                BOOST_CHECK( static_cast< int >( columns.size( ) ) < numberOfParameters );
+                const double chiSquared = outlierRejection.computeChiSquared( partials,
+                                                                              observationResiduals,
+                                                                              parameterCorrection( columns ),
+                                                                              parameterCovariance( columns, columns ),
+                                                                              observationCovariance,
+                                                                              isRejected );
+                BOOST_CHECK_CLOSE_FRACTION( chiSquared, expectedChiSquared, 1.0E-12 );
+            }
+        }
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END( )  // carpino_outlier_rejection
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

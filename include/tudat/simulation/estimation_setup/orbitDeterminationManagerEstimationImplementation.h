@@ -101,11 +101,10 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performEsti
     bool hasOffDiagonalWeights = false;
     retrieveObservationWeights< ObservationScalarType, TimeType >(
             estimationData, weightsMatrixDiagonals, weightsMatrix, hasOffDiagonalWeights );
-    if( isSparseDesignMatrix && ( hasOffDiagonalWeights || applyOutlierRejection ) )
+    if( isSparseDesignMatrix && hasOffDiagonalWeights )
     {
         throw std::runtime_error(
-                "Error when estimating parameters, a sparse design matrix cannot be used with correlated observation weights or "
-                "outlier rejection." );
+                "Error when estimating parameters, a sparse design matrix cannot be used with correlated observation weights." );
     }
 
     // Create the solver of the normal equations. The solver of the best iteration is kept to compute the covariance.
@@ -560,24 +559,20 @@ OrbitDeterminationManager< ObservationScalarType, TimeType, Dummy >::performEsti
         // Update which observations are rejected, using the data of the current iteration. The observations that are
         // rejected here are excluded from the next iteration, and rejected observations that are recovered here are
         // included again.
-        if constexpr( !isSparseDesignMatrix )
+        if( applyOutlierRejection )
         {
-            if( applyOutlierRejection )
-            {
-                const OutlierRejectionInput< ObservationScalarType, TimeType > outlierRejectionInput(
-                        numberOfIterations,
-                        computationData,
-                        computedResiduals,
-                        computedDesignMatrixEstimatedParameters,
-                        parameterCovariance,
-                        parameterAddition );
-                outlierRejection->updateRejectionStatus( outlierRejectionInput );
+            const OutlierRejectionInput< ObservationScalarType, TimeType > outlierRejectionInput( numberOfIterations,
+                                                                                                  computationData,
+                                                                                                  computedResiduals,
+                                                                                                  computedDesignMatrixEstimatedParameters,
+                                                                                                  parameterCovariance,
+                                                                                                  parameterAddition );
+            outlierRejection->updateRejectionStatus( outlierRejectionInput );
 
-                if( estimationInput->getPrintOutput( ) )
-                {
-                    std::cout << "Number of rejected observations: " << outlierRejection->getNumberOfRejectedObservations( ) << " out of "
-                              << observationDataset->getNumberOfObservations( ) << std::endl;
-                }
+            if( estimationInput->getPrintOutput( ) )
+            {
+                std::cout << "Number of rejected observations: " << outlierRejection->getNumberOfRejectedObservations( ) << " out of "
+                          << observationDataset->getNumberOfObservations( ) << std::endl;
             }
         }
 

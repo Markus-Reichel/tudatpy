@@ -21,6 +21,7 @@
 #include <vector>
 
 #include <Eigen/Core>
+#include <Eigen/SparseCore>
 
 #include "tudat/simulation/estimation_setup/observationVectorData.h"
 #include "tudat/simulation/estimation_setup/observationCondition.h"
@@ -43,6 +44,7 @@ using ObservableType = tudat::observation_models::ObservableType;
  */
 template< typename ObservationScalarType = double, typename TimeType = double >
 struct OutlierRejectionInput {
+    //! Constructor for a dense design matrix, which is referenced, not copied.
     OutlierRejectionInput( const int iterationNumber,
                            const observation_models::ObservationVectorData< ObservationScalarType, TimeType >& flattenedObservationData,
                            const Eigen::Matrix< ObservationScalarType, Eigen::Dynamic, 1 >& residuals,
@@ -50,18 +52,64 @@ struct OutlierRejectionInput {
                            const Eigen::MatrixXd& parameterCovariance,
                            const Eigen::Matrix< ObservationScalarType, Eigen::Dynamic, 1 >& parameterCorrection ):
         iterationNumber_( iterationNumber ), flattenedObservationData_( flattenedObservationData ), residuals_( residuals ),
-        designMatrix_( designMatrix ), parameterCovariance_( parameterCovariance ), parameterCorrection_( parameterCorrection )
+        parameterCovariance_( parameterCovariance ), parameterCorrection_( parameterCorrection ), denseDesignMatrix_( &designMatrix )
     {}
 
-    //! Return the rows of the design matrix H that belong to a single observation.
+    //! Constructor for a sparse design matrix, which is copied with row-major storage, so that its rows can be read quickly.
+    OutlierRejectionInput( const int iterationNumber,
+                           const observation_models::ObservationVectorData< ObservationScalarType, TimeType >& flattenedObservationData,
+                           const Eigen::Matrix< ObservationScalarType, Eigen::Dynamic, 1 >& residuals,
+                           const Eigen::SparseMatrix< double >& designMatrix,
+                           const Eigen::MatrixXd& parameterCovariance,
+                           const Eigen::Matrix< ObservationScalarType, Eigen::Dynamic, 1 >& parameterCorrection ):
+        iterationNumber_( iterationNumber ), flattenedObservationData_( flattenedObservationData ), residuals_( residuals ),
+        parameterCovariance_( parameterCovariance ), parameterCorrection_( parameterCorrection ), denseDesignMatrix_( nullptr ),
+        sparseDesignMatrix_( designMatrix )
+    {}
+
+    //! Return the rows of the design matrix H that belong to a single observation, restricted to their non-zero columns.
     /*!
-     * The returned block has as many rows as the observable has components, and one column per estimated parameter.
-     * This is what a criterion that is evaluated per observation needs.
+     * The block has as many rows as the observable has components. An observation usually depends on a few parameters
+     * only, so a criterion evaluated per observation only needs these columns.
+     * \param observationId Id of the observation
+     * \param columns Indices of the parameters on which the observation depends (returned by reference)
+     * \return Rows of the design matrix, with one column per entry of columns
      */
-    Eigen::MatrixXd getDesignMatrixBlock( const unsigned int observationId ) const
+    Eigen::MatrixXd getDesignMatrixBlock( const unsigned int observationId, std::vector< int >& columns ) const
     {
         const std::pair< int, unsigned int > rowRange = getRowRange( observationId );
-        return designMatrix_.block( rowRange.first, 0, rowRange.second, designMatrix_.cols( ) );
+        columns.clear( );
+        if( denseDesignMatrix_ != nullptr )
+        {
+            const auto rows = denseDesignMatrix_->middleRows( rowRange.first, rowRange.second );
+            for( int column = 0; column < rows.cols( ); column++ )
+            {
+                if( !rows.col( column ).isZero( 0.0 ) )
+                {
+                    columns.push_back( column );
+                }
+            }
+            return rows( Eigen::placeholders::all, columns );
+        }
+
+        for( unsigned int row = 0; row < rowRange.second; row++ )
+        {
+            for( Eigen::SparseMatrix< double, Eigen::RowMajor >::InnerIterator it( sparseDesignMatrix_, rowRange.first + row ); it; ++it )
+            {
+                columns.push_back( it.col( ) );
+            }
+        }
+        std::sort( columns.begin( ), columns.end( ) );
+        columns.erase( std::unique( columns.begin( ), columns.end( ) ), columns.end( ) );
+        Eigen::MatrixXd block = Eigen::MatrixXd::Zero( rowRange.second, columns.size( ) );
+        for( unsigned int row = 0; row < rowRange.second; row++ )
+        {
+            for( Eigen::SparseMatrix< double, Eigen::RowMajor >::InnerIterator it( sparseDesignMatrix_, rowRange.first + row ); it; ++it )
+            {
+                block( row, std::lower_bound( columns.begin( ), columns.end( ), it.col( ) ) - columns.begin( ) ) = it.value( );
+            }
+        }
+        return block;
     }
 
     //! Return the residuals of a single observation (one entry per component of the observable).
@@ -93,9 +141,6 @@ struct OutlierRejectionInput {
     //! Residual vector of all observations.
     const Eigen::Matrix< ObservationScalarType, Eigen::Dynamic, 1 >& residuals_;
 
-    //! Design matrix (partials of the observations w.r.t. the estimated parameters) of all observations.
-    const Eigen::MatrixXd& designMatrix_;
-
     //! Covariance of the estimated parameters, as computed in the current iteration.
     const Eigen::MatrixXd& parameterCovariance_;
 
@@ -103,6 +148,12 @@ struct OutlierRejectionInput {
     const Eigen::Matrix< ObservationScalarType, Eigen::Dynamic, 1 >& parameterCorrection_;
 
 private:
+    //! Dense design matrix (partials of the observations w.r.t. the estimated parameters) of all observations, or null.
+    const Eigen::MatrixXd* denseDesignMatrix_;
+
+    //! Sparse design matrix of all observations, used when no dense one is given.
+    Eigen::SparseMatrix< double, Eigen::RowMajor > sparseDesignMatrix_;
+
     //! Return the first row and the number of rows that one observation occupies in the residuals/design matrix.
     std::pair< int, unsigned int > getRowRange( const unsigned int observationId ) const
     {
@@ -317,15 +368,19 @@ protected:
             return;
         }
         std::vector< double > chiSquaredPerObservation;
+        std::vector< int > columns;
+        const Eigen::VectorXd parameterCorrection = outlierRejectionInput.parameterCorrection_.template cast< double >( );
 
         // Compute chi-squared for each observation, using its persistent dataset id to find the matching rows.
         for( unsigned int observationIndex = 0; observationIndex < this->isRejected_.size( ); observationIndex++ )
         {
+            // Only the parameters on which the observation depends enter its chi-squared value.
             const unsigned int observationId = this->observationIds_.at( observationIndex );
-            const double chiSquared = computeChiSquared( outlierRejectionInput.getDesignMatrixBlock( observationId ),
+            const Eigen::MatrixXd partials = outlierRejectionInput.getDesignMatrixBlock( observationId, columns );
+            const double chiSquared = computeChiSquared( partials,
                                                          outlierRejectionInput.getResidualBlock( observationId ).template cast< double >( ),
-                                                         outlierRejectionInput.parameterCorrection_.template cast< double >( ),
-                                                         outlierRejectionInput.parameterCovariance_,
+                                                         parameterCorrection( columns ),
+                                                         outlierRejectionInput.parameterCovariance_( columns, columns ),
                                                          outlierRejectionInput.getObservationCovariance( observationId ),
                                                          this->getRejectionStatus( ).at( observationIndex ) );
 
