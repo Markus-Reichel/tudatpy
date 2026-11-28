@@ -42,7 +42,7 @@ Eigen::Vector3d ConstantInteractionModel::computeAerodynamicCoefficients( )
     updateMembers( );
 
     double cosineDelta;
-    double actualCrossSectionArea = 0;
+    double actualCrossSectionArea = 0.0;
     Eigen::Vector3d panelNormal;
 
     for( int i = 0; i < totalNumberOfPanels_; i++ )
@@ -51,7 +51,7 @@ Eigen::Vector3d ConstantInteractionModel::computeAerodynamicCoefficients( )
         cosineDelta = panelNormal.dot( -incomingDirection_ );
         cosineDelta = cosineDelta > 0.0 ? cosineDelta : 0.0;
         surfacePanelCosines_[ i ] = cosineDelta;
-        if( cosineDelta == 0 )
+        if( cosineDelta == 0.0 )
         {
             illuminatedPanelFractions_[ i ] = 0.0;
             continue;
@@ -81,7 +81,7 @@ Eigen::Vector3d NewtonGasSurfaceInteractionModel::computeAerodynamicCoefficients
         cosineDelta = panelNormal.dot( -incomingDirection_ );
         cosineDelta = cosineDelta > 0.0 ? cosineDelta : 0.0;
         surfacePanelCosines_[ i ] = cosineDelta;
-        if( cosineDelta == 0 )
+        if( cosineDelta == 0.0 )
         {
             illuminatedPanelFractions_[ i ] = 0.0;
             continue;
@@ -92,7 +92,7 @@ Eigen::Vector3d NewtonGasSurfaceInteractionModel::computeAerodynamicCoefficients
         }
         panelArea = allPanels_[ i ]->getPanelArea( ) * illuminatedPanelFractions_[ i ];
         // Cp
-        Cp = 2 * cosineDelta * cosineDelta;
+        Cp = 2.0 * cosineDelta * cosineDelta;
         // add panel contribution to the force coefficient vector (pre-multiplied by the surface
         // of the panel, which will be removed later)
         currentForceCoefficientsBodyFrame += -Cp * panelNormal * panelArea;
@@ -119,7 +119,7 @@ Eigen::Vector3d StorchGasSurfaceInteractionModel::computeAerodynamicCoefficients
         cosineDelta = panelNormal.dot( -incomingDirection_ );
         cosineDelta = cosineDelta > 0.0 ? cosineDelta : 0.0;
         surfacePanelCosines_[ i ] = cosineDelta;
-        if( cosineDelta == 0 )
+        if( cosineDelta == 0.0 )
         {
             illuminatedPanelFractions_[ i ] = 0.0;
             continue;
@@ -128,14 +128,14 @@ Eigen::Vector3d StorchGasSurfaceInteractionModel::computeAerodynamicCoefficients
         {
             continue;
         }
-        sineDelta = std::sqrt( std::max( 0.0, 1 - cosineDelta * cosineDelta ) );
+        sineDelta = std::sqrt( std::max( 0.0, 1.0 - cosineDelta * cosineDelta ) );
         panelArea = allPanels_[ i ]->getPanelArea( ) * illuminatedPanelFractions_[ i ];
         // Cp
-        Cp = 2 * cosineDelta *
+        Cp = 2.0 * cosineDelta *
                 ( allPanels_[ i ]->getNormalAccomodationCoefficient( ) * allPanels_[ i ]->getNormalVelocityAtWallRatio( ) +
-                  ( 2 - allPanels_[ i ]->getNormalAccomodationCoefficient( ) ) * cosineDelta );
+                  ( 2.0 - allPanels_[ i ]->getNormalAccomodationCoefficient( ) ) * cosineDelta );
         // Ct
-        Ct = 2 * allPanels_[ i ]->getTangentialAccomodationCoefficient( ) * sineDelta * cosineDelta;
+        Ct = 2.0 * allPanels_[ i ]->getTangentialAccomodationCoefficient( ) * sineDelta * cosineDelta;
         // add panel contribution to the force coefficient vector (pre-multiplied by the surface
         // of the panel, which will be removed later)
         currentForceCoefficientsBodyFrame +=
@@ -169,7 +169,7 @@ Eigen::Vector3d StorchGasSurfaceInteractionModel::computeAerodynamicCoefficients
         panelNormal = allPanels_[ i ]->getBodyFixedSurfaceNormal( )( );
         cosineDelta = panelNormal.dot( -incomingDirection_ );
         cosineDelta = cosineDelta > 0.0 ? cosineDelta : 0.0;
-        if( cosineDelta == 0 )
+        if( cosineDelta == 0.0 )
         {
             continue;
         }
@@ -177,7 +177,7 @@ Eigen::Vector3d StorchGasSurfaceInteractionModel::computeAerodynamicCoefficients
         {
             continue;
         }
-        sineDelta = std::sqrt( std::max( 0.0, 1 - cosineDelta * cosineDelta ) );
+        sineDelta = std::sqrt( std::max( 0.0, 1.0 - cosineDelta * cosineDelta ) );
         panelArea = allPanels_[ i ]->getPanelArea( ) * illuminatedPanelFractions_[ i ];
         dCp = 0.0;
         dCt = 0.0;
@@ -185,15 +185,15 @@ Eigen::Vector3d StorchGasSurfaceInteractionModel::computeAerodynamicCoefficients
         {
             case normal_accommodation_property:
                 // Cp = 2 cosD ( sigma_n V_w + (2 - sigma_n) cosD ) -> dCp/dsigma_n = 2 cosD ( V_w - cosD )
-                dCp = 2 * cosineDelta * ( allPanels_[ i ]->getNormalVelocityAtWallRatio( ) - cosineDelta );
+                dCp = 2.0 * cosineDelta * ( allPanels_[ i ]->getNormalVelocityAtWallRatio( ) - cosineDelta );
                 break;
             case normal_velocity_ratio_property:
                 // dCp/dV_w = 2 cosD sigma_n
-                dCp = 2 * cosineDelta * allPanels_[ i ]->getNormalAccomodationCoefficient( );
+                dCp = 2.0 * cosineDelta * allPanels_[ i ]->getNormalAccomodationCoefficient( );
                 break;
             case tangential_accommodation_property:
                 // Ct = 2 sigma_t sinD cosD -> dCt/dsigma_t = 2 sinD cosD
-                dCt = 2 * sineDelta * cosineDelta;
+                dCt = 2.0 * sineDelta * cosineDelta;
                 break;
             default:
                 // Energy accommodation does not enter the Storch model: partial is exactly zero.
@@ -213,7 +213,7 @@ Eigen::Vector3d StorchGasSurfaceInteractionModel::computeAerodynamicCoefficients
 Eigen::Vector3d SentmanGasSurfaceInteractionModel::computeAerodynamicCoefficients( )
 {
     updateMembers( );
-    speedRatio_ = airSpeed_ / std::sqrt( 2 * specificGasConstant_ * freeStreamTemperature_ );
+    speedRatio_ = airSpeed_ / std::sqrt( 2.0 * specificGasConstant_ * freeStreamTemperature_ );
     double cosineDelta, sineDelta;
     double Cp, Ct, panelArea, reflectedSpeedRatio;
     double erf, exp;
@@ -227,7 +227,7 @@ Eigen::Vector3d SentmanGasSurfaceInteractionModel::computeAerodynamicCoefficient
         cosineDelta = panelNormal.dot( -incomingDirection_ );
         cosineDelta = cosineDelta > 0.0 ? cosineDelta : 0.0;
         surfacePanelCosines_[ i ] = cosineDelta;
-        if( cosineDelta == 0 )
+        if( cosineDelta == 0.0 )
         {
             illuminatedPanelFractions_[ i ] = 0.0;
             continue;
@@ -238,21 +238,27 @@ Eigen::Vector3d SentmanGasSurfaceInteractionModel::computeAerodynamicCoefficient
         }
         erf = std::erf( speedRatio_ * cosineDelta );
         exp = std::exp( -speedRatio_ * speedRatio_ * cosineDelta * cosineDelta );
-        sineDelta = std::sqrt( std::max( 0.0, 1 - cosineDelta * cosineDelta ) );
+        sineDelta = std::sqrt( std::max( 0.0, 1.0 - cosineDelta * cosineDelta ) );
         panelArea = allPanels_[ i ]->getPanelArea( ) * illuminatedPanelFractions_[ i ];
         // Ratio of reflected to incoming molecule speed, with the energy accommodation of Koppenwallner (2009), as in ADBSat
         // toolbox/fmf_eq/coeff_sentman.m. See Tuttas et al. (2024), arXiv:2411.11597, Sec. 2.3.
-        reflectedSpeedRatio = std::sqrt(
-                0.5 *
-                ( 1 +
+        reflectedSpeedRatio = 0.5 *
+                ( 1.0 +
                   allPanels_[ i ]->getEnergyAccomodationCoefficient( ) *
-                          ( 4 * specificGasConstant_ * allPanels_[ i ]->getPanelTemperature( ) / ( airSpeed_ * airSpeed_ ) - 1 ) ) );
+                          ( 4.0 * specificGasConstant_ * allPanels_[ i ]->getPanelTemperature( ) / ( airSpeed_ * airSpeed_ ) - 1.0 ) );
+        if( !( reflectedSpeedRatio > 0.0 ) )
+        {
+            throw std::runtime_error( "Error in Sentman model, reflected molecule energy is not positive for panel type " +
+                                      allPanels_[ i ]->getPanelTypeId( ) + ", energy accommodation coefficient " +
+                                      std::to_string( allPanels_[ i ]->getEnergyAccomodationCoefficient( ) ) );
+        }
+        reflectedSpeedRatio = std::sqrt( reflectedSpeedRatio );
         // Cp, as in the ADBSat paper (eq. 6) and toolbox/fmf_eq/coeff_sentman.m
-        Cp = ( cosineDelta * cosineDelta + 1.0 / ( 2 * speedRatio_ * speedRatio_ ) ) * ( 1 + erf ) +
+        Cp = ( cosineDelta * cosineDelta + 1.0 / ( 2.0 * speedRatio_ * speedRatio_ ) ) * ( 1.0 + erf ) +
                 cosineDelta / ( speedRatio_ * sqrtPi ) * exp +
-                0.5 * reflectedSpeedRatio * ( sqrtPi * cosineDelta * ( 1 + erf ) + 1.0 / speedRatio_ * exp );
+                0.5 * reflectedSpeedRatio * ( sqrtPi * cosineDelta * ( 1.0 + erf ) + 1.0 / speedRatio_ * exp );
         // Ct
-        Ct = sineDelta * cosineDelta * ( 1 + erf ) + sineDelta / ( speedRatio_ * sqrtPi ) * exp;
+        Ct = sineDelta * cosineDelta * ( 1.0 + erf ) + sineDelta / ( speedRatio_ * sqrtPi ) * exp;
         // add panel contribution to the force coefficient vector (pre-multiplied by the surface
         // of the panel, which will be removed later)
         currentForceCoefficientsBodyFrame +=
@@ -276,7 +282,7 @@ Eigen::Vector3d SentmanGasSurfaceInteractionModel::computeAerodynamicCoefficient
         return Eigen::Vector3d::Zero( );
     }
 
-    speedRatio_ = airSpeed_ / std::sqrt( 2 * specificGasConstant_ * freeStreamTemperature_ );
+    speedRatio_ = airSpeed_ / std::sqrt( 2.0 * specificGasConstant_ * freeStreamTemperature_ );
     double sqrtPi = std::sqrt( mathematical_constants::PI );
     double cosineDelta;
     double dCp, dCt, panelArea;
@@ -292,7 +298,7 @@ Eigen::Vector3d SentmanGasSurfaceInteractionModel::computeAerodynamicCoefficient
         panelNormal = allPanels_[ i ]->getBodyFixedSurfaceNormal( )( );
         cosineDelta = panelNormal.dot( -incomingDirection_ );
         cosineDelta = cosineDelta > 0.0 ? cosineDelta : 0.0;
-        if( cosineDelta == 0 )
+        if( cosineDelta == 0.0 )
         {
             continue;
         }
@@ -305,10 +311,10 @@ Eigen::Vector3d SentmanGasSurfaceInteractionModel::computeAerodynamicCoefficient
         panelArea = allPanels_[ i ]->getPanelArea( ) * illuminatedPanelFractions_[ i ];
         // Cp = ... + 0.5 sqrt(B) ( sqrtPi cosD (1+erf) + (1/S) exp ), with B = 1/2 ( 1 + alpha_e ( 4 R Tp / V^2 - 1 ) ).
         // d sqrt(B)/d alpha_e = ( dB/d alpha_e ) / ( 2 sqrt(B) ), dB/d alpha_e = 1/2 ( 4 R Tp / V^2 - 1 ).
-        double wallEnergyTerm = 4 * specificGasConstant_ * allPanels_[ i ]->getPanelTemperature( ) / ( airSpeed_ * airSpeed_ ) - 1;
-        double bTerm = 0.5 * ( 1 + allPanels_[ i ]->getEnergyAccomodationCoefficient( ) * wallEnergyTerm );
+        double wallEnergyTerm = 4.0 * specificGasConstant_ * allPanels_[ i ]->getPanelTemperature( ) / ( airSpeed_ * airSpeed_ ) - 1.0;
+        double bTerm = 0.5 * ( 1.0 + allPanels_[ i ]->getEnergyAccomodationCoefficient( ) * wallEnergyTerm );
         double bTermDerivative = 0.5 * wallEnergyTerm;
-        dCp = 0.5 * bTermDerivative / ( 2.0 * std::sqrt( bTerm ) ) * ( sqrtPi * cosineDelta * ( 1 + erf ) + 1.0 / speedRatio_ * exp );
+        dCp = 0.5 * bTermDerivative / ( 2.0 * std::sqrt( bTerm ) ) * ( sqrtPi * cosineDelta * ( 1.0 + erf ) + 1.0 / speedRatio_ * exp );
         // Ct is independent of the energy accommodation coefficient.
         dCt = 0.0;
         coefficientPartialBodyFrame +=
@@ -329,7 +335,7 @@ Eigen::Vector3d CookGasSurfaceInteractionModel::computeAerodynamicCoefficients( 
     double Cd, Cl, Cp, Ct, panelArea;
     double sqrt;
     // Kinetic temperature of the incoming flow, Ti = V^2 / ( 3 R ), as in ADBSat toolbox/fmf_eq/coeff_cook.m
-    incidentTemperature_ = airSpeed_ * airSpeed_ / ( 3 * specificGasConstant_ );
+    incidentTemperature_ = airSpeed_ * airSpeed_ / ( 3.0 * specificGasConstant_ );
     Eigen::Vector3d currentForceCoefficientsBodyFrame = Eigen::Vector3d::Zero( );
     Eigen::Vector3d panelNormal;
 
@@ -339,7 +345,7 @@ Eigen::Vector3d CookGasSurfaceInteractionModel::computeAerodynamicCoefficients( 
         cosineDelta = panelNormal.dot( -incomingDirection_ );
         cosineDelta = cosineDelta > 0.0 ? cosineDelta : 0.0;
         surfacePanelCosines_[ i ] = cosineDelta;
-        if( cosineDelta == 0 )
+        if( cosineDelta == 0.0 )
         {
             illuminatedPanelFractions_[ i ] = 0.0;
             continue;
@@ -348,14 +354,21 @@ Eigen::Vector3d CookGasSurfaceInteractionModel::computeAerodynamicCoefficients( 
         {
             continue;
         }
-        sineDelta = std::sqrt( std::max( 0.0, 1 - cosineDelta * cosineDelta ) );
+        sineDelta = std::sqrt( std::max( 0.0, 1.0 - cosineDelta * cosineDelta ) );
         panelArea = allPanels_[ i ]->getPanelArea( ) * illuminatedPanelFractions_[ i ];
         // Energy accommodation term alpha ( Tw / Ti - 1 ), as in ADBSat toolbox/fmf_eq/coeff_cook.m
-        sqrt = std::sqrt( 1 +
-                          allPanels_[ i ]->getEnergyAccomodationCoefficient( ) *
-                                  ( allPanels_[ i ]->getPanelTemperature( ) / incidentTemperature_ - 1 ) );
+        sqrt = 1.0 +
+                allPanels_[ i ]->getEnergyAccomodationCoefficient( ) *
+                        ( allPanels_[ i ]->getPanelTemperature( ) / incidentTemperature_ - 1.0 );
+        if( !( sqrt > 0.0 ) )
+        {
+            throw std::runtime_error( "Error in Cook model, reflected molecule energy is not positive for panel type " +
+                                      allPanels_[ i ]->getPanelTypeId( ) + ", energy accommodation coefficient " +
+                                      std::to_string( allPanels_[ i ]->getEnergyAccomodationCoefficient( ) ) );
+        }
+        sqrt = std::sqrt( sqrt );
         // Cd
-        Cd = 2 * cosineDelta * ( 1 + 2.0 / 3.0 * cosineDelta * sqrt );
+        Cd = 2.0 * cosineDelta * ( 1.0 + 2.0 / 3.0 * cosineDelta * sqrt );
         // Cl
         Cl = 4.0 / 3.0 * sineDelta * cosineDelta * sqrt;
         // convert cd, cd to cp, ct
@@ -384,7 +397,7 @@ Eigen::Vector3d CookGasSurfaceInteractionModel::computeAerodynamicCoefficientsPa
         return Eigen::Vector3d::Zero( );
     }
 
-    incidentTemperature_ = airSpeed_ * airSpeed_ / ( 3 * specificGasConstant_ );
+    incidentTemperature_ = airSpeed_ * airSpeed_ / ( 3.0 * specificGasConstant_ );
     double cosineDelta, sineDelta;
     double dCd, dCl, dCp, dCt, panelArea;
     Eigen::Vector3d coefficientPartialBodyFrame = Eigen::Vector3d::Zero( );
@@ -398,7 +411,7 @@ Eigen::Vector3d CookGasSurfaceInteractionModel::computeAerodynamicCoefficientsPa
         panelNormal = allPanels_[ i ]->getBodyFixedSurfaceNormal( )( );
         cosineDelta = panelNormal.dot( -incomingDirection_ );
         cosineDelta = cosineDelta > 0.0 ? cosineDelta : 0.0;
-        if( cosineDelta == 0 )
+        if( cosineDelta == 0.0 )
         {
             continue;
         }
@@ -406,11 +419,11 @@ Eigen::Vector3d CookGasSurfaceInteractionModel::computeAerodynamicCoefficientsPa
         {
             continue;
         }
-        sineDelta = std::sqrt( std::max( 0.0, 1 - cosineDelta * cosineDelta ) );
+        sineDelta = std::sqrt( std::max( 0.0, 1.0 - cosineDelta * cosineDelta ) );
         panelArea = allPanels_[ i ]->getPanelArea( ) * illuminatedPanelFractions_[ i ];
         // sqrtTerm = sqrt( 1 + alpha_e ( Tp / Ti - 1 ) ); d sqrtTerm/d alpha_e = ( Tp / Ti - 1 ) / ( 2 sqrtTerm ).
-        double wallTemperatureTerm = allPanels_[ i ]->getPanelTemperature( ) / incidentTemperature_ - 1;
-        double sqrtTerm = std::sqrt( 1 + allPanels_[ i ]->getEnergyAccomodationCoefficient( ) * wallTemperatureTerm );
+        double wallTemperatureTerm = allPanels_[ i ]->getPanelTemperature( ) / incidentTemperature_ - 1.0;
+        double sqrtTerm = std::sqrt( 1.0 + allPanels_[ i ]->getEnergyAccomodationCoefficient( ) * wallTemperatureTerm );
         double sqrtTermDerivative = wallTemperatureTerm / ( 2.0 * sqrtTerm );
         // Cd = 2 cosD ( 1 + 2/3 cosD sqrtTerm ), Cl = 4/3 sinD cosD sqrtTerm.
         dCd = 4.0 / 3.0 * cosineDelta * cosineDelta * sqrtTermDerivative;

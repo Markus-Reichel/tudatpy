@@ -14,6 +14,7 @@
 #include "tudat/astro/aerodynamics/flightConditions.h"
 #include "tudat/astro/aerodynamics/standardAtmosphere.h"
 #include "tudat/astro/basic_astro/oblateSpheroidBodyShapeModel.h"
+#include "tudat/astro/basic_astro/physicalConstants.h"
 #include "tudat/math/basic/mathematicalConstants.h"
 
 namespace tudat
@@ -210,12 +211,20 @@ double AtmosphericFlightConditions::getAerodynamicCoefficientIndependentVariable
             currentIndependentVariable = getCurrentAirspeed( );
             break;
         case specific_gas_constant_dependent:
-            // Ideal gas law, p = rho R T
-            currentIndependentVariable = getCurrentPressure( ) / ( getCurrentDensity( ) * getCurrentFreestreamTemperature( ) );
-            if( !( currentIndependentVariable > 0.0 ) )
+            // Ideal gas law, p = rho R T. At zero density there is no aerodynamic force, so the value of R does not matter there.
+            if( getCurrentDensity( ) == 0.0 )
             {
-                throw std::runtime_error( "Error, specific gas constant from atmosphere pressure, density and temperature is " +
-                                          std::to_string( currentIndependentVariable ) + "; the atmosphere model must define all three." );
+                currentIndependentVariable = physical_constants::SPECIFIC_GAS_CONSTANT_AIR;
+            }
+            else
+            {
+                currentIndependentVariable = getCurrentPressure( ) / ( getCurrentDensity( ) * getCurrentFreestreamTemperature( ) );
+                if( !std::isfinite( currentIndependentVariable ) || currentIndependentVariable <= 0.0 )
+                {
+                    throw std::runtime_error( "Error, specific gas constant from atmosphere pressure, density and temperature is " +
+                                              std::to_string( currentIndependentVariable ) +
+                                              "; the atmosphere model must define all three." );
+                }
             }
             break;
 

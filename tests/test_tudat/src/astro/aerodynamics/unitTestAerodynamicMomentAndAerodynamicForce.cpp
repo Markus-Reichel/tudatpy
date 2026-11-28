@@ -26,6 +26,7 @@
 
 #include <limits>
 
+#include <map>
 #include <memory>
 #include <boost/test/tools/floating_point_comparison.hpp>
 #include <boost/test/included/unit_test.hpp>
@@ -48,6 +49,8 @@
 #include "tudat/astro/system_models/panelGeometryUtils.h"
 #include "tudat/astro/system_models/vehicleExteriorPanels.h"
 #include "tudat/astro/aerodynamics/gasSurfaceInteractionModel.h"
+#include "tudat/astro/aerodynamics/nrlmsise00Atmosphere.h"
+#include "tudat/astro/aerodynamics/panelledAerodynamicCoefficientInterface.h"
 #include "tudat/simulation/environment_setup/createBodiesFactory.h"
 #include "tudat/astro/basic_astro/oblateSpheroidBodyShapeModel.h"
 
@@ -1189,7 +1192,8 @@ BOOST_AUTO_TEST_CASE( testCombinedAerodynamicForceAndMoment )
 
 BOOST_AUTO_TEST_CASE( test_panelled_coefficients )
 {
-    const double tolerance = std::numeric_limits< double >::epsilon( );
+    // The coefficients are of order 1, so this is a relative tolerance of about 10 eps
+    const double tolerance = 10.0 * std::numeric_limits< double >::epsilon( );
 
     double panelArea = 0.5;
     double referenceArea = 1.0;
@@ -1322,14 +1326,14 @@ BOOST_AUTO_TEST_CASE( test_panelled_coefficients )
                 // Unit vector along the panel, in the direction of the flow
                 tangentialDirection = ( incomingDirection - incomingDirection.dot( panelNormal ) * panelNormal ).normalized( );
                 // Cp, written as in ADBSat toolbox/fmf_eq/coeff_sentman.m
-                Cp = ( cosineDelta * cosineDelta + 1.0 / ( 2 * speedRatio * speedRatio ) ) * ( 1 + erf ) +
+                Cp = ( cosineDelta * cosineDelta + 1.0 / ( 2.0 * speedRatio * speedRatio ) ) * ( 1.0 + erf ) +
                         cosineDelta / ( sqrtPi * speedRatio ) * exp +
                         0.5 *
-                                std::sqrt(
-                                        0.5 *
-                                        ( 1 +
-                                          energyAccomodationCoefficient *
-                                                  ( 2 * panelTemperature / ( freeStreamTemperature * speedRatio * speedRatio ) - 1 ) ) ) *
+                                std::sqrt( 0.5 *
+                                           ( 1 +
+                                             energyAccomodationCoefficient *
+                                                     ( 2.0 * panelTemperature / ( freeStreamTemperature * speedRatio * speedRatio ) -
+                                                       1.0 ) ) ) *
                                 ( sqrtPi * cosineDelta * ( 1 + erf ) + 1.0 / speedRatio * exp );
                 // Ct
                 Ct = sineDelta * cosineDelta * ( 1 + erf ) + sineDelta / ( speedRatio * sqrtPi ) * exp;
@@ -1349,7 +1353,7 @@ BOOST_AUTO_TEST_CASE( test_panelled_coefficients )
         cookModel.setAirSpeed( airSpeed );
         cookModel.setSpecifiGasConstant( specificGasConstant );
         // Kinetic temperature of the incoming flow, as in ADBSat toolbox/fmf_eq/coeff_cook.m
-        double kineticTemperature = airSpeed * airSpeed / ( 3 * specificGasConstant );
+        double kineticTemperature = airSpeed * airSpeed / ( 3.0 * specificGasConstant );
         Eigen::Vector3d forceCoefficients, actualForceCoefficients, panelNormal, incomingDirection, tangentialDirection;
         double Cp, Ct, cosineDelta, sineDelta, sqrt, Cd, Cl;
         for( unsigned int i = 0; i < angleOfAttack.size( ); i++ )
@@ -1366,7 +1370,7 @@ BOOST_AUTO_TEST_CASE( test_panelled_coefficients )
                 panelNormal = localFrameSurfaceNormal( );
                 cosineDelta = panelNormal.dot( -incomingDirection );
                 cosineDelta = cosineDelta > 0 ? cosineDelta : 0.0;
-                sqrt = std::sqrt( 1 + energyAccomodationCoefficient * ( panelTemperature / kineticTemperature - 1 ) );
+                sqrt = std::sqrt( 1.0 + energyAccomodationCoefficient * ( panelTemperature / kineticTemperature - 1.0 ) );
                 sineDelta = std::sqrt( std::max( 0.0, 1 - cosineDelta * cosineDelta ) );
                 // Unit vector along the panel, in the direction of the flow
                 tangentialDirection = ( incomingDirection - incomingDirection.dot( panelNormal ) * panelNormal ).normalized( );
@@ -1387,6 +1391,132 @@ BOOST_AUTO_TEST_CASE( test_panelled_coefficients )
                 BOOST_CHECK_SMALL( std::fabs( forceCoefficients.dot( incomingDirection ) - Cd * panelArea / referenceArea ), tolerance );
             }
         }
+    }
+
+    // Flow at delta = pi/5 from the panel normal (x), with the flow along the panel in the -z direction
+    const Eigen::Vector3d incomingDirection( -std::cos( PI / 5.0 ), 0.0, -std::sin( PI / 5.0 ) );
+
+    // TEST 5: Sentman and Cook against ADBSat (github.com/nhcrisp/ADBSat, commit d213fa9), toolbox/fmf_eq/coeff_sentman.m and
+    // coeff_cook.m, evaluated for the inputs above and delta = pi/5
+    {
+        std::map< GasSurfaceInteractionModelType, std::pair< double, double > > adbsatPressureAndShearCoefficients = {
+            { sentman, { 1.6724747633164163, 0.951056516297904 } }, { cook, { 1.645544920244723, 0.95105651629515364 } }
+        };
+        for( const auto& adbsatEntry : adbsatPressureAndShearCoefficients )
+        {
+            std::shared_ptr< GasSurfaceInteractionModel > model =
+                    createGasSurfaceInteractionModel( adbsatEntry.first, allPanels, referenceArea, 0, false );
+            model->setFreeStreamTemperature( freeStreamTemperature );
+            model->setAirSpeed( airSpeed );
+            model->setSpecifiGasConstant( specificGasConstant );
+            model->setIncomingDirection( incomingDirection );
+            Eigen::Vector3d forceCoefficients = model->computeAerodynamicCoefficients( ) * referenceArea / panelArea;
+
+            BOOST_CHECK_CLOSE_FRACTION( -forceCoefficients( 0 ), adbsatEntry.second.first, 1.0E-14 );
+            BOOST_CHECK_CLOSE_FRACTION( -forceCoefficients( 2 ), adbsatEntry.second.second, 1.0E-14 );
+        }
+    }
+
+    // TEST 6: Order of the independent variables of the panelled coefficient interface, [aoa, aos, T, V, R] for Sentman and
+    // [aoa, aos, V, R] for Cook
+    {
+        std::map< GasSurfaceInteractionModelType, std::vector< double > > independentVariables = {
+            { sentman, { PI / 5.0, 0.0, freeStreamTemperature, airSpeed, specificGasConstant } },
+            { cook, { PI / 5.0, 0.0, airSpeed, specificGasConstant } }
+        };
+        for( const auto& variablesEntry : independentVariables )
+        {
+            std::shared_ptr< GasSurfaceInteractionModel > model =
+                    createGasSurfaceInteractionModel( variablesEntry.first, allPanels, referenceArea, 0, false );
+            model->setFreeStreamTemperature( freeStreamTemperature );
+            model->setAirSpeed( airSpeed );
+            model->setSpecifiGasConstant( specificGasConstant );
+            model->setIncomingDirection( incomingDirection );
+            Eigen::Vector3d expectedForceCoefficients = model->computeAerodynamicCoefficients( );
+
+            PanelledAerodynamicCoefficientInterface coefficientInterface(
+                    createGasSurfaceInteractionModel( variablesEntry.first, allPanels, referenceArea, 0, false ),
+                    createIndependentVariablesNamesForGasSurfaceInteractionModel( variablesEntry.first ),
+                    referenceArea,
+                    body_fixed_frame_coefficients );
+            coefficientInterface.updateCurrentCoefficients( variablesEntry.second );
+            for( int k = 0; k < 3; k++ )
+            {
+                BOOST_CHECK_SMALL( std::fabs( coefficientInterface.getCurrentForceCoefficients( )( k ) - expectedForceCoefficients( k ) ),
+                                   tolerance );
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE( test_specific_gas_constant_from_atmosphere )
+{
+    // For the UTC time used by NRLMSISE
+    spice_interface::loadStandardSpiceKernels( );
+
+    const double exponentialGasConstant = 400.0;
+    const double constantTemperatureGasConstant = 450.0;
+    std::vector< std::shared_ptr< AtmosphereSettings > > atmosphereSettings = {
+        exponentialAtmosphereSettings( 7.2E3, 290.0, 1.225, exponentialGasConstant ),
+        std::make_shared< CustomConstantTemperatureAtmosphereSettings >(
+                []( double, double, double, double ) { return 1.0E-11; }, 1000.0, constantTemperatureGasConstant ),
+        nrlmsise00AtmosphereSettings( )
+    };
+
+    for( unsigned int i = 0; i < atmosphereSettings.size( ); i++ )
+    {
+        BodyListSettings bodySettings( "SSB", "ECLIPJ2000" );
+        bodySettings.addSettings( "Earth" );
+        bodySettings.at( "Earth" )->ephemerisSettings = constantEphemerisSettings( Eigen::Vector6d::Zero( ) );
+        bodySettings.at( "Earth" )->rotationModelSettings =
+                constantRotationModelSettings( "ECLIPJ2000", "IAU_Earth", Eigen::Matrix3d::Identity( ) );
+        bodySettings.at( "Earth" )->shapeModelSettings = sphericalBodyShapeSettings( 6378.0E3 );
+        bodySettings.at( "Earth" )->atmosphereSettings = atmosphereSettings.at( i );
+
+        // Vehicle at 400 km altitude, with coefficients that depend only on the specific gas constant
+        Eigen::Vector6d vehicleState;
+        vehicleState << 6778.0E3, 0.0, 0.0, 0.0, 7.5E3, 0.0;
+        bodySettings.addSettings( "Vehicle" );
+        bodySettings.at( "Vehicle" )->constantMass = 500.0;
+        bodySettings.at( "Vehicle" )->ephemerisSettings = constantEphemerisSettings( vehicleState );
+        bodySettings.at( "Vehicle" )->rotationModelSettings =
+                constantRotationModelSettings( "ECLIPJ2000", "VehicleFixed", Eigen::Matrix3d::Identity( ) );
+        bodySettings.at( "Vehicle" )->aerodynamicCoefficientSettings = std::make_shared< CustomAerodynamicCoefficientSettings >(
+                []( const std::vector< double >& ) { return Eigen::Vector3d( 2.2, 0.0, 0.0 ); },
+                []( const std::vector< double >& ) { return Eigen::Vector3d::Zero( ); },
+                1.0,
+                1.0,
+                Eigen::Vector3d::Zero( ),
+                std::vector< AerodynamicCoefficientsIndependentVariables >{ specific_gas_constant_dependent } );
+
+        SystemOfBodies bodies = createSystemOfBodies( bodySettings );
+        addAtmosphericFlightConditions( bodies, "Vehicle", "Earth" );
+        for( const std::string bodyName : { "Earth", "Vehicle" } )
+        {
+            bodies.at( bodyName )->setStateFromEphemeris( 0.0 );
+            bodies.at( bodyName )->setCurrentRotationToLocalFrameFromEphemeris( 0.0 );
+        }
+        std::shared_ptr< AtmosphericFlightConditions > flightConditions =
+                std::dynamic_pointer_cast< AtmosphericFlightConditions >( bodies.at( "Vehicle" )->getFlightConditions( ) );
+        flightConditions->updateConditions( 0.0 );
+
+        double expectedGasConstant = exponentialGasConstant;
+        if( i == 1 )
+        {
+            expectedGasConstant = constantTemperatureGasConstant;
+        }
+        else if( i == 2 )
+        {
+            expectedGasConstant = physical_constants::MOLAR_GAS_CONSTANT /
+                    std::dynamic_pointer_cast< NRLMSISE00Atmosphere >( bodies.at( "Earth" )->getAtmosphereModel( ) )
+                            ->getMeanMolarMass( flightConditions->getCurrentAltitude( ),
+                                                flightConditions->getCurrentLongitude( ),
+                                                flightConditions->getCurrentGeodeticLatitude( ),
+                                                flightConditions->getCurrentUtc( ) );
+        }
+        BOOST_CHECK_CLOSE_FRACTION( flightConditions->getAerodynamicCoefficientIndependentVariables( ).at( 0 ),
+                                    expectedGasConstant,
+                                    10.0 * std::numeric_limits< double >::epsilon( ) );
     }
 }
 

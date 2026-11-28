@@ -163,6 +163,8 @@ Can be used for a custom coefficient interface with other variables, at the expe
             .value( "specific_gas_constant_dependent",
                     ta::AerodynamicCoefficientsIndependentVariables::specific_gas_constant_dependent,
                     R"doc(
+      Specific gas constant of the atmosphere, computed as :math:`R = p / ( \rho T )` from the pressure, density and temperature
+      of the atmosphere model.
       )doc" )
             .export_values( );
 

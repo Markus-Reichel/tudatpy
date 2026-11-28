@@ -15,6 +15,7 @@
 #include <iostream>
 #include <vector>
 #include "tudat/astro/aerodynamics/atmosphereModel.h"
+#include "tudat/astro/basic_astro/physicalConstants.h"
 #include "tudat/astro/basic_astro/timeConversions.h"
 #include "tudat/astro/basic_astro/dateTime.h"
 
@@ -130,8 +131,9 @@ public:
      */
     virtual double getPressure( const double altitude, const double longitude, const double latitude, const double time )
     {
-        throw std::runtime_error( "Error wen getting Mars DTM pressure; model not yet implemented." );
-        return TUDAT_NAN;
+        // Ideal gas law, p = n R T, with n the total molar density of the species
+        computeProperties( altitude, longitude, latitude, time );
+        return currentMolarDensity_ * physical_constants::MOLAR_GAS_CONSTANT * currentTemperature_z;
     }
 
     //! Get local temperature.
@@ -273,6 +275,7 @@ private:
     double currentTemperature_inf;
     double currentdTemperature_;
     double currentDensity_;
+    double currentMolarDensity_;
     double sigma;
     double currentTemperature_z;
 };

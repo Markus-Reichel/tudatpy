@@ -559,6 +559,7 @@ double MarsDtmAtmosphereModel::getTotalDensity( const double altitude,
     double avogadroConstant_ = 6.022E23;  // physical_constants::AVOGADRO_CONSTANT;
     double rho0;
     double rho = 0;
+    double molarDensity = 0.0;
     int indexm = 0;
     for( int col = 7; col < 25; col += 2 )
     {
@@ -567,8 +568,10 @@ double MarsDtmAtmosphereModel::getTotalDensity( const double altitude,
         double gl = computeGl_Subr( latitude, longitude, minutes_, hours_, day_, month_, year_, col );
 
         rho += rho0 * fi * exp( gl );
+        molarDensity += rho0 * fi * exp( gl ) / mmass_[ indexm ];  // mol/cm3
         indexm += 1;
     }
+    currentMolarDensity_ = molarDensity * 1.0E6;  // mol/m3
     return rho * 1000;
 }
 

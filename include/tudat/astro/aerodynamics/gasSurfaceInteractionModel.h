@@ -300,17 +300,17 @@ inline std::shared_ptr< GasSurfaceInteractionModel > createGasSurfaceInteraction
             // checking material properties
             for( auto panel : allPanels )
             {
-                if( panel->getNormalAccomodationCoefficient( ) == -1 )
+                if( panel->getNormalAccomodationCoefficient( ) == -1.0 )
                 {
                     throw std::runtime_error( "Error, normal accomodation coefficient for panel type " + panel->getPanelTypeId( ) +
                                               " not defined but is required for Storch model" );
                 }
-                if( panel->getTangentialAccomodationCoefficient( ) == -1 )
+                if( panel->getTangentialAccomodationCoefficient( ) == -1.0 )
                 {
                     throw std::runtime_error( "Error, tangential accomodation coefficient for panel type " + panel->getPanelTypeId( ) +
                                               " not defined but is required for Storch model" );
                 }
-                if( panel->getNormalVelocityAtWallRatio( ) == -1 )
+                if( panel->getNormalVelocityAtWallRatio( ) == -1.0 )
                 {
                     throw std::runtime_error( "Error, normal velocity ratio for panel type " + panel->getPanelTypeId( ) +
                                               " not defined but is required for Storch model" );
@@ -322,7 +322,7 @@ inline std::shared_ptr< GasSurfaceInteractionModel > createGasSurfaceInteraction
             // checking material properties
             for( auto panel : allPanels )
             {
-                if( panel->getEnergyAccomodationCoefficient( ) == -1 )
+                if( panel->getEnergyAccomodationCoefficient( ) == -1.0 )
                 {
                     throw std::runtime_error( "Error, energy accomodation coefficient for panel type " + panel->getPanelTypeId( ) +
                                               " not defined but is required for Sentman model" );
@@ -334,7 +334,7 @@ inline std::shared_ptr< GasSurfaceInteractionModel > createGasSurfaceInteraction
             // checking material properties
             for( auto panel : allPanels )
             {
-                if( panel->getEnergyAccomodationCoefficient( ) == -1 )
+                if( panel->getEnergyAccomodationCoefficient( ) == -1.0 )
                 {
                     throw std::runtime_error( "Error, energy accomodation coefficient for panel type " + panel->getPanelTypeId( ) +
                                               " not defined but is required for Cook model" );

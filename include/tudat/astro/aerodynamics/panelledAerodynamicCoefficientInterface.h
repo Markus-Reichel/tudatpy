@@ -33,6 +33,12 @@ public:
 
     void updateCurrentCoefficients( const std::vector< double >& independentVariables, const double currentTime = TUDAT_NAN ) override
     {
+        if( independentVariables.size( ) != numberOfIndependentVariables_ )
+        {
+            throw std::runtime_error( "Error in panelled aerodynamic coefficients, expected " +
+                                      std::to_string( numberOfIndependentVariables_ ) + " independent variables, but received " +
+                                      std::to_string( independentVariables.size( ) ) );
+        }
         gasSurfaceInteractionModel_->setIncomingDirection(
                 Eigen::Vector3d( -std::cos( independentVariables[ 0 ] ) * std::cos( independentVariables[ 1 ] ),
                                  -std::sin( independentVariables[ 1 ] ),
